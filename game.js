@@ -98,9 +98,20 @@ const enemySpawns = [
   { x: TILE * 7.5, y: TILE * 5.5 },
   { x: TILE * 3.5, y: TILE * 6.5 },
   { x: TILE * 6.5, y: TILE * 7.5 },
-  { x: TILE * 2.5, y: TILE * 4.5 },
-  { x: TILE * 9.5, y: TILE * 6.5 },
+  { x: TILE * 2.5, y: TILE * 5.5 },
+  { x: TILE * 9.5, y: TILE * 5.5 },
   { x: TILE * 5.5, y: TILE * 1.5 },
+];
+
+const enemyPatrols = [
+  [{ x: TILE * 5.5, y: TILE * 3.5 }, { x: TILE * 9.5, y: TILE * 3.5 }, { x: TILE * 9.5, y: TILE * 7.5 }],
+  [{ x: TILE * 9.5, y: TILE * 1.5 }, { x: TILE * 9.5, y: TILE * 7.5 }, { x: TILE * 1.5, y: TILE * 7.5 }],
+  [{ x: TILE * 7.5, y: TILE * 5.5 }, { x: TILE * 7.5, y: TILE * 7.5 }, { x: TILE * 3.5, y: TILE * 7.5 }, { x: TILE * 3.5, y: TILE * 5.5 }],
+  [{ x: TILE * 3.5, y: TILE * 6.5 }, { x: TILE * 6.5, y: TILE * 6.5 }, { x: TILE * 6.5, y: TILE * 3.5 }],
+  [{ x: TILE * 6.5, y: TILE * 7.5 }, { x: TILE * 1.5, y: TILE * 7.5 }, { x: TILE * 1.5, y: TILE * 3.5 }],
+  [{ x: TILE * 2.5, y: TILE * 5.5 }, { x: TILE * 2.5, y: TILE * 7.5 }, { x: TILE * 5.5, y: TILE * 7.5 }],
+  [{ x: TILE * 9.5, y: TILE * 5.5 }, { x: TILE * 5.5, y: TILE * 5.5 }, { x: TILE * 5.5, y: TILE * 3.5 }],
+  [{ x: TILE * 5.5, y: TILE * 1.5 }, { x: TILE * 8.5, y: TILE * 1.5 }, { x: TILE * 8.5, y: TILE * 5.5 }],
 ];
 
 const healthPackCells = [
@@ -133,6 +144,8 @@ function createEnemy(spawn, index, round = 1) {
     hitTimer: 0,
     suppressTimer: 0,
     deathTimer: 0,
+    waypointIndex: 0,
+    spawnIndex: index,
     strafe: index % 2 === 0 ? 1 : -1,
     speedBias: (0.9 + index * 0.06) * roundScale,
     awareness: 0,
@@ -160,6 +173,7 @@ function resetGame(running = true) {
     killStreakCount: 0,
     killStreakTimer: 0,
     _lastShotHeadshot: false,
+    killFeed: [],
     player: {
       x: TILE * 1.5,
       y: TILE * 1.5,
@@ -179,6 +193,7 @@ function resetGame(running = true) {
       jumpHeight: 0,
       onGround: true,
       armor: 0,
+      lastDamageTime: -99,
     },
     enemies: spawnEnemiesForRound(1),
     healthPacks: [],
@@ -703,6 +718,9 @@ function shoot(shooter, target, isPlayer) {
         game.killStreakCount++;
         const streakMsg = game.killStreakCount === 2 ? "Double Kill!" : game.killStreakCount === 3 ? "Triple Kill!" : game.killStreakCount >= 4 ? "MULTI KILL!" : headshot ? "HEADSHOT!" : "Kill!";
         setMessage(streakMsg, 1.0);
+        const feedLabel = headshot ? "HEADSHOT KILL" : "Kill";
+        game.killFeed.unshift({ text: `${feedLabel}  +${killScore}`, timer: 4.0 });
+        if (game.killFeed.length > 4) game.killFeed.pop();
       } else if (headshot) {
         game.score += 25;
         game.hitMarkerTimer = 0.35;
@@ -716,6 +734,7 @@ function shoot(shooter, target, isPlayer) {
     } else {
       game.damageTimer = 0.45;
       game.damageAngle = Math.atan2(shooter.y - game.player.y, shooter.x - game.player.x);
+      game.player.lastDamageTime = game.elapsed;
       playSound("damage");
       setMessage("Under fire", 0.45);
     }
@@ -791,7 +810,7 @@ function setMessage(text, seconds) {
 function checkWinner() {
   if (game.player.health <= 0 && game.running) {
     game.running = false;
-    statusText.textContent = `Game Over  Score: ${game.score}`;
+    statusText.textContent = `Round ${game.round} · ${game.kills} kills · ${game.score} pts`;
     playSound("lose");
     return;
   }
@@ -846,6 +865,7 @@ function update(dt) {
   game.hitMarkerTimer = Math.max(0, game.hitMarkerTimer - dt);
   game.killStreakTimer = Math.max(0, game.killStreakTimer - dt);
   if (game.killStreakTimer <= 0) game.killStreakCount = 0;
+  game.killFeed = game.killFeed.filter((e) => { e.timer -= dt; return e.timer > 0; });
 
   if (game.roundTransitionTimer > 0) {
     game.roundTransitionTimer -= dt;
@@ -936,6 +956,12 @@ function update(dt) {
       player.footstepDist = 0;
       playSound("footstep");
     }
+  }
+
+  const timeSinceDamage = game.elapsed - player.lastDamageTime;
+  if (timeSinceDamage > 5.0 && player.health > 0 && player.health < 30) {
+    player.health = Math.min(30, player.health + 6 * dt);
+    updateHud();
   }
 
   if (game.mouseHeld && player.cooldown <= 0 && !player.reloading) {
@@ -1034,18 +1060,40 @@ function updateEnemy(enemy, dt) {
 
   if (Math.random() < 0.01) enemy.strafe *= -1;
 
-  enemy.wanderTimer -= dt;
-  if (enemy.wanderTimer <= 0) {
-    enemy.wanderTimer = 1.4 + Math.random() * 1.6;
-    enemy.wanderAngle += (Math.random() - 0.5) * 1.8;
-  }
-
   const trackingPlayer = enemy.awareness > 0.25 && clearSight;
   const suppressed = enemy.suppressTimer > 0;
-  const desiredAim = trackingPlayer ? angleToPlayer : enemy.wanderAngle;
+
+  const patrols = enemyPatrols[enemy.spawnIndex];
+  let desiredAim;
+  let baseSpeed;
+
+  if (trackingPlayer) {
+    desiredAim = angleToPlayer;
+    baseSpeed = suppressed ? 74 : 58;
+  } else if (patrols) {
+    const wp = patrols[enemy.waypointIndex % patrols.length];
+    const dxWP = wp.x - enemy.x;
+    const dyWP = wp.y - enemy.y;
+    const distWP = Math.hypot(dxWP, dyWP);
+    if (distWP < 16) {
+      enemy.waypointIndex = (enemy.waypointIndex + 1) % patrols.length;
+    }
+    desiredAim = Math.atan2(dyWP, dxWP);
+    enemy.wanderAngle = desiredAim;
+    baseSpeed = 40;
+  } else {
+    enemy.wanderTimer -= dt;
+    if (enemy.wanderTimer <= 0) {
+      enemy.wanderTimer = 1.4 + Math.random() * 1.6;
+      enemy.wanderAngle += (Math.random() - 0.5) * 1.8;
+    }
+    desiredAim = enemy.wanderAngle;
+    baseSpeed = 36;
+  }
+
   enemy.angle = rotateToward(enemy.angle, desiredAim, enemy.turnSpeed * dt);
 
-  let moveAngle = trackingPlayer ? angleToPlayer : enemy.wanderAngle;
+  let moveAngle = desiredAim;
   if (trackingPlayer && dist < 190) moveAngle += Math.PI;
   if (suppressed) {
     moveAngle += Math.PI * 0.55 * enemy.strafe;
@@ -1053,7 +1101,6 @@ function updateEnemy(enemy, dt) {
     moveAngle += Math.PI / 2 * enemy.strafe;
   }
 
-  const baseSpeed = suppressed ? 74 : trackingPlayer ? 58 : 36;
   const speed = baseSpeed * enemy.speedBias;
   moveEntity(enemy, Math.cos(moveAngle) * speed * dt, Math.sin(moveAngle) * speed * dt);
 
@@ -1084,6 +1131,7 @@ function render() {
   drawScreenEffects();
   drawDamageIndicator();
   drawHitMarker();
+  drawKillFeed();
   drawRoundBanner();
   requestAnimationFrame(loop);
 }
@@ -1556,6 +1604,20 @@ function drawHitMarker() {
   ctx.moveTo(cx + s, cy - s);
   ctx.lineTo(cx - s, cy + s);
   ctx.stroke();
+  ctx.restore();
+}
+
+function drawKillFeed() {
+  if (game.killFeed.length === 0) return;
+  ctx.save();
+  ctx.textAlign = "right";
+  ctx.font = `${Math.round(canvas.width * 0.022)}px Inter, ui-sans-serif, sans-serif`;
+  for (let i = 0; i < game.killFeed.length; i++) {
+    const entry = game.killFeed[i];
+    const alpha = Math.min(1, entry.timer * 0.7);
+    ctx.fillStyle = `rgba(255, 93, 108, ${alpha})`;
+    ctx.fillText(entry.text, canvas.width - 22, canvas.height * 0.14 + i * Math.round(canvas.width * 0.026));
+  }
   ctx.restore();
 }
 
