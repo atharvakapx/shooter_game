@@ -7,6 +7,7 @@ const playerHealthBar = document.querySelector("#playerHealthBar");
 const enemyHealthBar = document.querySelector("#enemyHealthBar");
 const weaponChargeBar = document.querySelector("#weaponChargeBar");
 const weaponStateEl = document.querySelector("#weaponState");
+const weaponNameEl = document.querySelector("#weaponName");
 const enemyDistanceEl = document.querySelector("#enemyDistance");
 const matchTimerEl = document.querySelector("#matchTimer");
 const statusText = document.querySelector("#statusText");
@@ -29,18 +30,45 @@ const FOV = Math.PI / 3;
 const RAYS = 240;
 const MAX_DEPTH = 900;
 const MOUSE_SENSITIVITY = 0.0024;
-const PLAYER_SHOT_COOLDOWN = 0.42;
 const MAX_PITCH = 0.62;
 const MAX_HEALTH_PACKS = 3;
 const HEALTH_PACK_HEAL = 30;
 const HEALTH_PACK_INTERVAL = 8;
-
 const PLAYER_WALK_SPEED = 150;
 const PLAYER_BACK_SPEED = 105;
 const PLAYER_STRAFE_SPEED = 130;
 const PLAYER_SPRINT_SPEED = 228;
+const PLAYER_CROUCH_SPEED = 72;
 const PLAYER_ACCEL = 13;
-const RECOIL_KICK = 0.036;
+
+const WEAPONS = [
+  {
+    id: "rifle",
+    name: "RIFLE",
+    damage: 25,
+    cooldown: 0.42,
+    aimRadius: 0.14,
+    ammoMax: 30,
+    reloadTime: 2.0,
+    recoil: 0.036,
+    pellets: 1,
+    spread: 0,
+    color: "#20d7b5",
+  },
+  {
+    id: "shotgun",
+    name: "SHOTGUN",
+    damage: 13,
+    cooldown: 0.88,
+    aimRadius: 0.38,
+    ammoMax: 8,
+    reloadTime: 2.8,
+    recoil: 0.065,
+    pellets: 6,
+    spread: 0.28,
+    color: "#ffce63",
+  },
+];
 
 let game;
 let lastTime = 0;
@@ -87,6 +115,7 @@ function resetGame(running = true) {
     messageTimer: 0,
     flashTimer: 0,
     damageTimer: 0,
+    damageAngle: 0,
     hitMarkerTimer: 0,
     elapsed: 0,
     player: {
@@ -99,6 +128,11 @@ function resetGame(running = true) {
       vx: 0,
       vy: 0,
       footstepDist: 0,
+      weaponIndex: 0,
+      ammo: WEAPONS[0].ammoMax,
+      reloading: false,
+      reloadTimer: 0,
+      crouching: false,
     },
     enemies: enemySpawns.map(createEnemy),
     healthPacks: [],
@@ -168,7 +202,8 @@ function clamp(value, min, max) {
 }
 
 function getHorizon() {
-  return canvas.height * (0.5 - game.player.pitch * 0.42);
+  const crouchShift = game.player.crouching ? canvas.height * 0.055 : 0;
+  return canvas.height * (0.5 - game.player.pitch * 0.42) + crouchShift;
 }
 
 function getLivingEnemies() {
@@ -185,14 +220,16 @@ function getNearestEnemy() {
 
 function getAimedEnemy() {
   let best = null;
+  const weapon = WEAPONS[game.player.weaponIndex];
 
   for (const enemy of getLivingEnemies()) {
     const angleToTarget = Math.atan2(enemy.y - game.player.y, enemy.x - game.player.x);
     const aimError = Math.abs(normalizeAngle(angleToTarget - game.player.angle));
     const dist = Math.hypot(enemy.x - game.player.x, enemy.y - game.player.y);
     const clearShot = hasLineOfSight(game.player, enemy);
+    const maxRange = weapon.id === "shotgun" ? 380 : 520;
 
-    if (!clearShot || dist > 520 || aimError > 0.18) continue;
+    if (!clearShot || dist > maxRange || aimError > weapon.aimRadius) continue;
     if (!best || aimError < best.aimError) best = { enemy, aimError };
   }
 
@@ -299,6 +336,18 @@ function playSound(type) {
     return;
   }
 
+  if (type === "shotgunShot") {
+    osc.type = "sawtooth";
+    osc.frequency.setValueAtTime(280, now);
+    osc.frequency.exponentialRampToValueAtTime(60, now + 0.18);
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(0.28, now + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.24);
+    osc.start(now);
+    osc.stop(now + 0.25);
+    return;
+  }
+
   if (type === "enemyShot") {
     osc.type = "square";
     osc.frequency.setValueAtTime(220, now);
@@ -371,6 +420,60 @@ function playSound(type) {
     return;
   }
 
+  if (type === "reload") {
+    osc.type = "triangle";
+    osc.frequency.setValueAtTime(300, now);
+    osc.frequency.linearRampToValueAtTime(180, now + 0.08);
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(0.09, now + 0.005);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.1);
+    osc.start(now);
+    osc.stop(now + 0.11);
+    return;
+  }
+
+  if (type === "reloadDone") {
+    [380, 520].forEach((freq, i) => {
+      const n = audioCtx.createOscillator();
+      const g = audioCtx.createGain();
+      const t = now + i * 0.07;
+      n.type = "triangle";
+      n.frequency.setValueAtTime(freq, t);
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(0.1, t + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.1);
+      n.connect(g);
+      g.connect(audioCtx.destination);
+      n.start(t);
+      n.stop(t + 0.11);
+    });
+    return;
+  }
+
+  if (type === "empty") {
+    osc.type = "triangle";
+    osc.frequency.setValueAtTime(160, now);
+    osc.frequency.linearRampToValueAtTime(130, now + 0.06);
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(0.07, now + 0.005);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.08);
+    osc.start(now);
+    osc.stop(now + 0.09);
+    return;
+  }
+
+  if (type === "weaponSwitch") {
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(480, now);
+    osc.frequency.exponentialRampToValueAtTime(320, now + 0.08);
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(0.1, now + 0.005);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.1);
+    osc.start(now);
+    osc.stop(now + 0.11);
+    return;
+  }
+
   if (type === "win" || type === "lose" || type === "start") {
     const notes = type === "win" ? [440, 660, 880] : type === "lose" ? [240, 170, 120] : [260, 390];
     notes.forEach((note, index) => {
@@ -390,29 +493,80 @@ function playSound(type) {
   }
 }
 
+function startReload() {
+  const player = game.player;
+  const weapon = WEAPONS[player.weaponIndex];
+  if (player.reloading || player.ammo >= weapon.ammoMax) return;
+  player.reloading = true;
+  player.reloadTimer = weapon.reloadTime;
+  playSound("reload");
+  setMessage("Reloading...", weapon.reloadTime);
+}
+
+function switchWeapon() {
+  const player = game.player;
+  player.weaponIndex = (player.weaponIndex + 1) % WEAPONS.length;
+  player.reloading = false;
+  player.reloadTimer = 0;
+  player.ammo = WEAPONS[player.weaponIndex].ammoMax;
+  player.cooldown = 0.15;
+  playSound("weaponSwitch");
+  setMessage(WEAPONS[player.weaponIndex].name, 0.8);
+}
+
 function shoot(shooter, target, isPlayer) {
   if (shooter.cooldown > 0 || shooter.health <= 0 || target.health <= 0) return;
+  if (isPlayer && (game.player.reloading)) return;
 
-  const angleToTarget = Math.atan2(target.y - shooter.y, target.x - shooter.x);
-  const aimError = Math.abs(normalizeAngle(angleToTarget - shooter.angle));
-  const pitchError = isPlayer ? Math.abs(shooter.pitch) : 0;
-  const dist = Math.hypot(target.x - shooter.x, target.y - shooter.y);
-  const clearShot = hasLineOfSight(shooter, target);
-  const canHit = aimError < (isPlayer ? 0.13 : 0.18) && pitchError < 0.3 && dist < 520 && clearShot;
-
-  if (!isPlayer && !clearShot) return;
-
-  shooter.cooldown = isPlayer ? PLAYER_SHOT_COOLDOWN : 0.8;
-  playSound(isPlayer ? "playerShot" : "enemyShot");
-
-  if (isPlayer) {
-    shooter.pitch = clamp(shooter.pitch - RECOIL_KICK, -MAX_PITCH, MAX_PITCH);
+  if (isPlayer && game.player.ammo <= 0) {
+    playSound("empty");
+    startReload();
+    return;
   }
 
-  if (canHit) {
-    const damage = isPlayer ? 25 : 12;
+  const weapon = isPlayer ? WEAPONS[game.player.weaponIndex] : null;
+  shooter.cooldown = isPlayer ? weapon.cooldown : 0.8;
+
+  if (isPlayer) {
+    game.player.ammo--;
+    shooter.pitch = clamp(shooter.pitch - weapon.recoil, -MAX_PITCH, MAX_PITCH);
+    playSound(weapon.id === "shotgun" ? "shotgunShot" : "playerShot");
+  } else {
+    playSound("enemyShot");
+  }
+
+  const angleToTarget = Math.atan2(target.y - shooter.y, target.x - shooter.x);
+  const pellets = isPlayer ? weapon.pellets : 1;
+  const spread = isPlayer ? weapon.spread : 0;
+  const aimRadiusBase = isPlayer ? weapon.aimRadius : 0.18;
+  const clearShot = hasLineOfSight(shooter, target);
+  const dist = Math.hypot(target.x - shooter.x, target.y - shooter.y);
+
+  if (!isPlayer && !clearShot) {
+    shooter.cooldown = 0.8;
+    return;
+  }
+
+  let totalDamage = 0;
+
+  for (let p = 0; p < pellets; p++) {
+    const pelletSpread = pellets > 1 ? (Math.random() - 0.5) * spread : 0;
+    const pelletAngle = angleToTarget + pelletSpread;
+    const pelletAimError = Math.abs(normalizeAngle(pelletAngle - shooter.angle));
+    const pitchError = isPlayer ? Math.abs(shooter.pitch) : 0;
+    const maxRange = isPlayer && weapon.id === "shotgun" ? 380 : 520;
+    const canHit = pelletAimError < aimRadiusBase && pitchError < 0.3 && dist < maxRange && clearShot;
+
+    if (canHit) {
+      totalDamage += isPlayer ? weapon.damage : 12;
+    }
+
+    addShotParticles(shooter, pelletAngle, isPlayer);
+  }
+
+  if (totalDamage > 0) {
     const wasAlive = target.health > 0;
-    target.health = Math.max(0, target.health - damage);
+    target.health = Math.max(0, target.health - totalDamage);
 
     if (isPlayer) {
       target.hitTimer = 0.18;
@@ -421,13 +575,14 @@ function shoot(shooter, target, isPlayer) {
       if (wasAlive && target.health <= 0) {
         addDeathParticles(target);
         playSound("kill");
-        setMessage("Kill", 0.7);
+        setMessage("Kill!", 0.8);
       } else {
         playSound("hit");
-        setMessage("Hit", 0.45);
+        setMessage(`Hit ${totalDamage}`, 0.45);
       }
     } else {
-      game.damageTimer = 0.32;
+      game.damageTimer = 0.45;
+      game.damageAngle = Math.atan2(shooter.y - game.player.y, shooter.x - game.player.x);
       playSound("damage");
       setMessage("Under fire", 0.45);
     }
@@ -435,7 +590,6 @@ function shoot(shooter, target, isPlayer) {
     setMessage("Miss", 0.28);
   }
 
-  addShotParticles(shooter, angleToTarget, isPlayer);
   game.flashTimer = isPlayer ? 0.08 : game.flashTimer;
   updateHud();
   checkWinner();
@@ -492,16 +646,25 @@ function updateHud() {
   const living = getLivingEnemies();
   const totalEnemyHealth = game.enemies.reduce((sum, enemy) => sum + enemy.health, 0);
   const nearest = getNearestEnemy();
+  const player = game.player;
+  const weapon = WEAPONS[player.weaponIndex];
 
-  playerHealthEl.textContent = game.player.health;
+  playerHealthEl.textContent = player.health;
   enemyHealthEl.textContent = `${living.length}/${game.enemies.length}`;
-  playerHealthBar.style.width = `${game.player.health}%`;
+  playerHealthBar.style.width = `${player.health}%`;
   enemyHealthBar.style.width = `${totalEnemyHealth / game.enemies.length}%`;
 
-  const charge = Math.round((1 - game.player.cooldown / PLAYER_SHOT_COOLDOWN) * 100);
-  const clampedCharge = Math.max(0, Math.min(100, charge));
-  weaponChargeBar.style.width = `${clampedCharge}%`;
-  weaponStateEl.textContent = clampedCharge >= 100 ? "Ready" : `${clampedCharge}%`;
+  weaponNameEl.textContent = weapon.name;
+
+  if (player.reloading) {
+    const progress = 1 - player.reloadTimer / weapon.reloadTime;
+    weaponChargeBar.style.width = `${Math.round(progress * 100)}%`;
+    weaponStateEl.textContent = "RELOAD";
+  } else {
+    const charge = Math.round((1 - player.cooldown / weapon.cooldown) * 100);
+    weaponChargeBar.style.width = `${Math.max(0, Math.min(100, charge))}%`;
+    weaponStateEl.textContent = `${player.ammo}`;
+  }
 
   enemyDistanceEl.textContent = nearest ? `${Math.round(nearest.dist / TILE * 5)}m` : "--m";
 
@@ -525,15 +688,36 @@ function update(dt) {
     enemy.hitTimer = Math.max(0, enemy.hitTimer - dt);
   }
 
-  const sprinting = keys.has("ShiftLeft") || keys.has("ShiftRight");
+  player.crouching = keys.has("KeyC");
+
+  if (player.reloading) {
+    player.reloadTimer -= dt;
+    if (player.reloadTimer <= 0) {
+      player.reloading = false;
+      player.ammo = WEAPONS[player.weaponIndex].ammoMax;
+      playSound("reloadDone");
+      setMessage("Ready", 0.5);
+    }
+  }
+
+  if (player.ammo <= 0 && !player.reloading) {
+    startReload();
+  }
+
+  const sprinting = !player.crouching && (keys.has("ShiftLeft") || keys.has("ShiftRight"));
 
   let targetFwd = 0;
-  if (keys.has("KeyW")) targetFwd += sprinting ? PLAYER_SPRINT_SPEED : PLAYER_WALK_SPEED;
-  if (keys.has("KeyS")) targetFwd -= PLAYER_BACK_SPEED;
+  if (keys.has("KeyW")) {
+    targetFwd += player.crouching ? PLAYER_CROUCH_SPEED : sprinting ? PLAYER_SPRINT_SPEED : PLAYER_WALK_SPEED;
+  }
+  if (keys.has("KeyS")) {
+    targetFwd -= player.crouching ? PLAYER_CROUCH_SPEED * 0.7 : PLAYER_BACK_SPEED;
+  }
 
   let targetSide = 0;
-  if (keys.has("KeyA")) targetSide -= sprinting ? PLAYER_SPRINT_SPEED * 0.86 : PLAYER_STRAFE_SPEED;
-  if (keys.has("KeyD")) targetSide += sprinting ? PLAYER_SPRINT_SPEED * 0.86 : PLAYER_STRAFE_SPEED;
+  const sideSpeed = player.crouching ? PLAYER_CROUCH_SPEED : sprinting ? PLAYER_SPRINT_SPEED * 0.86 : PLAYER_STRAFE_SPEED;
+  if (keys.has("KeyA")) targetSide -= sideSpeed;
+  if (keys.has("KeyD")) targetSide += sideSpeed;
 
   const fwdX = Math.cos(player.angle);
   const fwdY = Math.sin(player.angle);
@@ -551,14 +735,14 @@ function update(dt) {
   const movSpeed = Math.hypot(player.vx, player.vy);
   if (movSpeed > 20) {
     player.footstepDist += movSpeed * dt;
-    const stepInterval = sprinting ? 50 : 76;
+    const stepInterval = player.crouching ? 110 : sprinting ? 50 : 76;
     if (player.footstepDist >= stepInterval) {
       player.footstepDist = 0;
       playSound("footstep");
     }
   }
 
-  if (game.mouseHeld && player.cooldown <= 0) {
+  if (game.mouseHeld && player.cooldown <= 0 && !player.reloading) {
     const target = getAimedEnemy();
     if (target) shoot(player, target, true);
   }
@@ -663,6 +847,7 @@ function render() {
   drawWeapon();
   drawMiniMap();
   drawScreenEffects();
+  drawDamageIndicator();
   drawHitMarker();
   requestAnimationFrame(loop);
 }
@@ -919,15 +1104,39 @@ function drawParticles3D() {
 function drawWeapon() {
   const w = canvas.width;
   const h = canvas.height;
-  const movSpeed = Math.hypot(game.player.vx, game.player.vy);
+  const player = game.player;
+  const weapon = WEAPONS[player.weaponIndex];
+  const movSpeed = Math.hypot(player.vx, player.vy);
   const bobAmt = clamp(movSpeed / PLAYER_WALK_SPEED, 0, 1);
   const sprinting = keys.has("ShiftLeft") || keys.has("ShiftRight");
   const bobFreq = sprinting ? 130 : 185;
   const bob = Math.sin(performance.now() / bobFreq) * 6 * bobAmt;
   const sway = Math.cos(performance.now() / (bobFreq * 2)) * 4 * bobAmt;
+  const reloadBob = player.reloading ? Math.sin(performance.now() / 90) * 8 : 0;
 
   ctx.save();
-  ctx.translate(w * 0.5 + sway, h + bob + game.player.pitch * h * 0.14);
+  ctx.translate(w * 0.5 + sway, h + bob + reloadBob + player.pitch * h * 0.14);
+
+  if (weapon.id === "shotgun") {
+    drawShotgunModel();
+  } else {
+    drawRifleModel();
+  }
+
+  if (game.flashTimer > 0) {
+    ctx.fillStyle = `rgba(255, 206, 99, ${game.flashTimer > 0.04 ? 0.86 : 0.5})`;
+    ctx.beginPath();
+    ctx.moveTo(-30, -195);
+    ctx.lineTo(0, weapon.id === "shotgun" ? -240 : -268);
+    ctx.lineTo(30, -195);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  ctx.restore();
+}
+
+function drawRifleModel() {
   const weaponGradient = ctx.createLinearGradient(-60, -190, 60, -40);
   weaponGradient.addColorStop(0, "#4a565d");
   weaponGradient.addColorStop(0.5, "#242c31");
@@ -944,16 +1153,58 @@ function drawWeapon() {
   ctx.shadowBlur = 0;
   ctx.fillStyle = "#0c1113";
   ctx.fillRect(-18, -195, 36, 48);
+}
 
-  if (game.flashTimer > 0) {
-    ctx.fillStyle = "rgba(255, 206, 99, 0.86)";
-    ctx.beginPath();
-    ctx.moveTo(-34, -210);
-    ctx.lineTo(0, -268);
-    ctx.lineTo(34, -210);
-    ctx.closePath();
-    ctx.fill();
-  }
+function drawShotgunModel() {
+  const grad = ctx.createLinearGradient(-70, -160, 70, -20);
+  grad.addColorStop(0, "#5c4a35");
+  grad.addColorStop(0.5, "#2e2218");
+  grad.addColorStop(1, "#0a0805");
+
+  ctx.fillStyle = grad;
+  ctx.fillRect(-68, -110, 136, 110);
+
+  ctx.fillStyle = "#3d4a50";
+  ctx.fillRect(-48, -158, 96, 74);
+
+  ctx.fillStyle = "#ffce63";
+  ctx.shadowColor = "rgba(255, 206, 99, 0.7)";
+  ctx.shadowBlur = 10;
+  ctx.fillRect(-30, -138, 60, 7);
+  ctx.shadowBlur = 0;
+
+  ctx.fillStyle = "#1a1008";
+  ctx.fillRect(-22, -178, 44, 52);
+
+  ctx.fillStyle = "#8b6914";
+  ctx.fillRect(-24, -165, 8, 32);
+  ctx.fillRect(16, -165, 8, 32);
+}
+
+function drawDamageIndicator() {
+  if (game.damageTimer <= 0) return;
+
+  const cx = canvas.width / 2;
+  const cy = canvas.height / 2;
+  const radius = Math.min(cx, cy) * 0.7;
+  const alpha = clamp(game.damageTimer / 0.45, 0, 1);
+  const relAngle = normalizeAngle(game.damageAngle - game.player.angle);
+
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(relAngle - Math.PI / 2);
+
+  const grad = ctx.createLinearGradient(0, -radius, 0, -radius * 0.55);
+  grad.addColorStop(0, `rgba(255, 93, 108, ${alpha * 0.72})`);
+  grad.addColorStop(1, "rgba(255, 93, 108, 0)");
+  ctx.fillStyle = grad;
+
+  ctx.beginPath();
+  ctx.arc(0, 0, radius, -0.44, 0.44);
+  ctx.arc(0, 0, radius * 0.62, 0.44, -0.44, true);
+  ctx.closePath();
+  ctx.fill();
+
   ctx.restore();
 }
 
@@ -994,7 +1245,7 @@ function drawScreenEffects() {
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
   if (game.damageTimer > 0) {
-    ctx.fillStyle = `rgba(255, 93, 108, ${game.damageTimer * 0.55})`;
+    ctx.fillStyle = `rgba(255, 93, 108, ${game.damageTimer * 0.35})`;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
   }
 }
@@ -1055,9 +1306,23 @@ function loop(time) {
 }
 
 window.addEventListener("keydown", (event) => {
-  if (["KeyW", "KeyA", "KeyS", "KeyD", "ShiftLeft", "ShiftRight"].includes(event.code)) {
+  const moveKeys = ["KeyW", "KeyA", "KeyS", "KeyD", "ShiftLeft", "ShiftRight", "KeyC"];
+  if (moveKeys.includes(event.code)) {
     event.preventDefault();
     keys.add(event.code);
+  }
+
+  if (!game?.running) return;
+
+  if (event.code === "KeyR") {
+    const weapon = WEAPONS[game.player.weaponIndex];
+    if (!game.player.reloading && game.player.ammo < weapon.ammoMax) {
+      startReload();
+    }
+  }
+
+  if (event.code === "KeyQ") {
+    switchWeapon();
   }
 });
 
@@ -1094,8 +1359,10 @@ canvas.addEventListener("mousedown", (event) => {
   initAudio();
   canvas.requestPointerLock?.();
   game.mouseHeld = true;
-  const target = getAimedEnemy();
-  if (target) shoot(game.player, target, true);
+  if (!game.player.reloading) {
+    const target = getAimedEnemy();
+    if (target) shoot(game.player, target, true);
+  }
 });
 
 window.addEventListener("mouseup", (event) => {
