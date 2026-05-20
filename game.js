@@ -11,6 +11,8 @@ const weaponNameEl = document.querySelector("#weaponName");
 const enemyDistanceEl = document.querySelector("#enemyDistance");
 const roundLabelEl = document.querySelector("#roundLabel");
 const scoreEl = document.querySelector("#scoreEl");
+const playerArmorEl = document.querySelector("#playerArmor");
+const playerArmorBar = document.querySelector("#playerArmorBar");
 const statusText = document.querySelector("#statusText");
 
 const keys = new Set();
@@ -71,6 +73,19 @@ const WEAPONS = [
     spread: 0.28,
     color: "#ffce63",
   },
+  {
+    id: "smg",
+    name: "SMG",
+    damage: 14,
+    cooldown: 0.16,
+    aimRadius: 0.22,
+    ammoMax: 25,
+    reloadTime: 1.5,
+    recoil: 0.018,
+    pellets: 1,
+    spread: 0.05,
+    color: "#a0d0ff",
+  },
 ];
 
 let game;
@@ -96,6 +111,15 @@ const healthPackCells = [
   { x: 8, y: 4 },
   { x: 10, y: 7 },
 ];
+
+const armorPackCells = [
+  { x: 5, y: 2 },
+  { x: 2, y: 7 },
+  { x: 9, y: 3 },
+  { x: 6, y: 6 },
+];
+
+const MAX_ARMOR = 50;
 
 function createEnemy(spawn, index, round = 1) {
   const roundScale = 1 + (round - 1) * 0.12;
@@ -135,6 +159,7 @@ function resetGame(running = true) {
     roundTransitionTimer: 0,
     killStreakCount: 0,
     killStreakTimer: 0,
+    _lastShotHeadshot: false,
     player: {
       x: TILE * 1.5,
       y: TILE * 1.5,
@@ -153,14 +178,18 @@ function resetGame(running = true) {
       jumpVelocity: 0,
       jumpHeight: 0,
       onGround: true,
+      armor: 0,
     },
     enemies: spawnEnemiesForRound(1),
     healthPacks: [],
     healthPackTimer: 1.5,
+    armorPacks: [],
+    armorPackTimer: 12,
     particles: [],
   };
   spawnHealthPack();
   spawnHealthPack();
+  spawnArmorPack();
   statusText.textContent = running ? "Survive" : "Click Start";
   startBtn.textContent = running ? "Restart" : "Start";
   updateHud();
@@ -262,6 +291,15 @@ function getAimedEnemy() {
   return best?.enemy ?? getNearestEnemy()?.enemy;
 }
 
+function isHeadshot(target) {
+  const dist = Math.hypot(target.x - game.player.x, target.y - game.player.y);
+  const size = Math.min(canvas.height * 0.65, (TILE * 420) / dist);
+  const horizonY = getHorizon();
+  const headCenterY = horizonY - size * 0.37;
+  const crosshairY = canvas.height / 2;
+  return Math.abs(crosshairY - headCenterY) < Math.max(10, size * 0.14);
+}
+
 function spawnHealthPack() {
   if (!game || game.healthPacks.length >= MAX_HEALTH_PACKS) return;
 
@@ -277,6 +315,20 @@ function spawnHealthPack() {
   if (candidates.length === 0) return;
   const pack = candidates[Math.floor(Math.random() * candidates.length)];
   game.healthPacks.push({ ...pack, pulse: Math.random() * Math.PI * 2 });
+}
+
+function spawnArmorPack() {
+  if (!game || game.armorPacks.length >= 2) return;
+
+  const candidates = armorPackCells
+    .map((cell) => ({ x: (cell.x + 0.5) * TILE, y: (cell.y + 0.5) * TILE }))
+    .filter((pack) => !isWall(pack.x, pack.y))
+    .filter((pack) => Math.hypot(pack.x - game.player.x, pack.y - game.player.y) > TILE * 1.5)
+    .filter((pack) => !game.armorPacks.some((existing) => Math.hypot(existing.x - pack.x, existing.y - pack.y) < TILE));
+
+  if (candidates.length === 0) return;
+  const pack = candidates[Math.floor(Math.random() * candidates.length)];
+  game.armorPacks.push({ ...pack, pulse: Math.random() * Math.PI * 2 });
 }
 
 function hasLineOfSight(from, to) {
@@ -608,7 +660,9 @@ function shoot(shooter, target, isPlayer) {
     const canHit = pelletAimError < aimRadiusBase && pitchError < 0.3 && dist < maxRange && clearShot;
 
     if (canHit) {
-      totalDamage += isPlayer ? weapon.damage : 12;
+      const headshot = isPlayer && pellets === 1 && isHeadshot(target);
+      totalDamage += isPlayer ? (headshot ? weapon.damage * 2 : weapon.damage) : 12;
+      if (headshot) game._lastShotHeadshot = true;
     } else if (isPlayer) {
       const wallHit = castRay(pelletAngle);
       if (wallHit.depth < MAX_DEPTH * 0.96) {
@@ -623,6 +677,15 @@ function shoot(shooter, target, isPlayer) {
 
   if (totalDamage > 0) {
     const wasAlive = target.health > 0;
+    const headshot = game._lastShotHeadshot;
+    game._lastShotHeadshot = false;
+
+    if (!isPlayer) {
+      const armorAbsorb = Math.min(game.player.armor, Math.ceil(totalDamage * 0.55));
+      game.player.armor = Math.max(0, game.player.armor - armorAbsorb);
+      totalDamage = Math.max(1, totalDamage - armorAbsorb);
+    }
+
     target.health = Math.max(0, target.health - totalDamage);
 
     if (isPlayer) {
@@ -634,11 +697,17 @@ function shoot(shooter, target, isPlayer) {
         target.deathTimer = 0.7;
         playSound("kill");
         game.kills++;
-        game.score += 100 * game.round;
+        const killScore = headshot ? 200 * game.round : 100 * game.round;
+        game.score += killScore;
         game.killStreakTimer = 3.5;
         game.killStreakCount++;
-        const streakMsg = game.killStreakCount === 2 ? "Double Kill!" : game.killStreakCount === 3 ? "Triple Kill!" : game.killStreakCount >= 4 ? "MULTI KILL!" : "Kill!";
+        const streakMsg = game.killStreakCount === 2 ? "Double Kill!" : game.killStreakCount === 3 ? "Triple Kill!" : game.killStreakCount >= 4 ? "MULTI KILL!" : headshot ? "HEADSHOT!" : "Kill!";
         setMessage(streakMsg, 1.0);
+      } else if (headshot) {
+        game.score += 25;
+        game.hitMarkerTimer = 0.35;
+        playSound("hit");
+        setMessage(`HEADSHOT! ${totalDamage}`, 0.6);
       } else {
         game.score += 10;
         playSound("hit");
@@ -742,8 +811,10 @@ function updateHud() {
   const weapon = WEAPONS[player.weaponIndex];
 
   playerHealthEl.textContent = player.health;
-  enemyHealthEl.textContent = `${living.length}/${game.enemies.length}`;
+  playerArmorEl.textContent = player.armor;
   playerHealthBar.style.width = `${player.health}%`;
+  playerArmorBar.style.width = `${(player.armor / MAX_ARMOR) * 100}%`;
+  enemyHealthEl.textContent = `${living.length}/${game.enemies.length}`;
   enemyHealthBar.style.width = `${totalEnemyHealth / game.enemies.length}%`;
 
   weaponNameEl.textContent = weapon.name;
@@ -782,8 +853,10 @@ function update(dt) {
       game.round++;
       game.enemies = spawnEnemiesForRound(game.round);
       game.healthPacks = [];
+      game.armorPacks = [];
       spawnHealthPack();
       spawnHealthPack();
+      spawnArmorPack();
       setMessage(`Round ${game.round}`, 2.0);
       playSound("start");
     }
@@ -871,6 +944,7 @@ function update(dt) {
   }
 
   updateHealthPacks(dt);
+  updateArmorPacks(dt);
   updateEnemies(dt);
   updateParticles(dt);
   updateHud();
@@ -900,6 +974,26 @@ function updateHealthPacks(dt) {
       return false;
     }
 
+    return true;
+  });
+}
+
+function updateArmorPacks(dt) {
+  game.armorPackTimer = Math.max(0, game.armorPackTimer - dt);
+  if (game.armorPackTimer <= 0) {
+    spawnArmorPack();
+    game.armorPackTimer = 14;
+  }
+
+  game.armorPacks = game.armorPacks.filter((pack) => {
+    pack.pulse += dt * 3.5;
+    const touching = Math.hypot(pack.x - game.player.x, pack.y - game.player.y) < 28;
+    if (touching && game.player.armor < MAX_ARMOR) {
+      game.player.armor = Math.min(MAX_ARMOR, game.player.armor + 25);
+      setMessage("Armor +25", 0.7);
+      playSound("heal");
+      return false;
+    }
     return true;
   });
 }
@@ -982,6 +1076,7 @@ function render() {
   resizeCanvas();
   drawWorld();
   drawHealthPacks();
+  drawArmorPacks();
   drawEnemies();
   drawEnemyIndicator();
   drawWeapon();
@@ -1136,6 +1231,53 @@ function drawHealthPacks() {
   }
 }
 
+function drawArmorPacks() {
+  for (const pack of game.armorPacks) {
+    const dx = pack.x - game.player.x;
+    const dy = pack.y - game.player.y;
+    const dist = Math.hypot(dx, dy);
+    const angle = normalizeAngle(Math.atan2(dy, dx) - game.player.angle);
+
+    if (Math.abs(angle) > FOV * 0.58 || !hasLineOfSight(game.player, pack)) continue;
+
+    const size = Math.min(canvas.height * 0.24, (TILE * 175) / dist);
+    const x = canvas.width / 2 + (angle / (FOV / 2)) * (canvas.width / 2) - size / 2;
+    const y = getHorizon() + size * 0.3 + Math.sin(pack.pulse) * size * 0.06;
+
+    ctx.save();
+    ctx.shadowColor = "rgba(77, 153, 255, 0.85)";
+    ctx.shadowBlur = 18;
+
+    ctx.fillStyle = "rgba(0, 0, 0, 0.3)";
+    ctx.beginPath();
+    ctx.ellipse(x + size * 0.5, y + size * 0.88, size * 0.38, size * 0.09, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = "#0e1a2e";
+    ctx.beginPath();
+    ctx.roundRect(x + size * 0.18, y + size * 0.18, size * 0.64, size * 0.58, size * 0.1);
+    ctx.fill();
+    ctx.strokeStyle = "#4d9fff";
+    ctx.lineWidth = Math.max(2, size * 0.035);
+    ctx.stroke();
+
+    ctx.fillStyle = "#4d9fff";
+    const cx = x + size * 0.5;
+    const cy = y + size * 0.47;
+    const r = size * 0.2;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy - r);
+    ctx.lineTo(cx + r * 0.7, cy - r * 0.3);
+    ctx.lineTo(cx + r * 0.4, cy + r * 0.4);
+    ctx.lineTo(cx, cy + r * 0.8);
+    ctx.lineTo(cx - r * 0.4, cy + r * 0.4);
+    ctx.lineTo(cx - r * 0.7, cy - r * 0.3);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
 function drawEnemy(enemy) {
   const dying = enemy.health <= 0 && enemy.deathTimer > 0;
 
@@ -1279,6 +1421,8 @@ function drawWeapon() {
 
   if (weapon.id === "shotgun") {
     drawShotgunModel();
+  } else if (weapon.id === "smg") {
+    drawSMGModel();
   } else {
     drawRifleModel();
   }
@@ -1339,6 +1483,31 @@ function drawShotgunModel() {
   ctx.fillStyle = "#8b6914";
   ctx.fillRect(-24, -165, 8, 32);
   ctx.fillRect(16, -165, 8, 32);
+}
+
+function drawSMGModel() {
+  const grad = ctx.createLinearGradient(-45, -145, 45, -10);
+  grad.addColorStop(0, "#38454c");
+  grad.addColorStop(0.5, "#1c2428");
+  grad.addColorStop(1, "#070b0d");
+
+  ctx.fillStyle = grad;
+  ctx.fillRect(-44, -96, 88, 96);
+  ctx.fillStyle = "#2a363d";
+  ctx.fillRect(-28, -138, 56, 66);
+  ctx.fillStyle = "#a0d0ff";
+  ctx.shadowColor = "rgba(160, 208, 255, 0.7)";
+  ctx.shadowBlur = 10;
+  ctx.fillRect(-20, -118, 40, 7);
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = "#0c1113";
+  ctx.fillRect(-14, -152, 28, 38);
+  ctx.fillStyle = "#1e2a30";
+  ctx.fillRect(-44, -60, 18, 60);
+  ctx.fillStyle = "#a0d0ff";
+  ctx.fillRect(-38, -50, 6, 4);
+  ctx.fillRect(-38, -38, 6, 4);
+  ctx.fillRect(-38, -26, 6, 4);
 }
 
 function drawDamageIndicator() {

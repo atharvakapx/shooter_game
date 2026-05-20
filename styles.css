@@ -133,6 +133,10 @@ button {
   background: var(--accent);
 }
 
+.armor-fill {
+  background: #4d9fff;
+}
+
 .enemy-fill {
   background: var(--danger);
 }
