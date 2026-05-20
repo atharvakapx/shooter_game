@@ -219,35 +219,7 @@ button:active {
 }
 
 .crosshair {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  width: 34px;
-  height: 34px;
-  transform: translate(-50%, -50%);
-  pointer-events: none;
-}
-
-.crosshair::before,
-.crosshair::after {
-  content: "";
-  position: absolute;
-  background: rgba(242, 245, 244, 0.9);
-  box-shadow: 0 0 10px rgba(32, 215, 181, 0.7);
-}
-
-.crosshair::before {
-  left: 15px;
-  top: 5px;
-  width: 2px;
-  height: 24px;
-}
-
-.crosshair::after {
-  left: 5px;
-  top: 15px;
-  width: 24px;
-  height: 2px;
+  display: none;
 }
 
 @media (max-width: 760px) {

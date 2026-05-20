@@ -136,25 +136,27 @@ const MAX_ARMOR = 50;
 
 function createEnemy(spawn, index, round = 1) {
   const roundScale = 1 + (round - 1) * 0.12;
+  const isHeavy = round >= 4 && index % 3 === 2;
   return {
     x: spawn.x,
     y: spawn.y,
     angle: Math.PI + index * 0.35,
-    health: Math.round(100 + (round - 1) * 18),
-    maxHealth: Math.round(100 + (round - 1) * 18),
-    cooldown: 0.8 + index * 0.22,
+    health: Math.round((isHeavy ? 220 : 100) + (round - 1) * (isHeavy ? 30 : 18)),
+    maxHealth: Math.round((isHeavy ? 220 : 100) + (round - 1) * (isHeavy ? 30 : 18)),
+    cooldown: (isHeavy ? 1.2 : 0.8) + index * 0.22,
     hitTimer: 0,
     suppressTimer: 0,
     deathTimer: 0,
     waypointIndex: 0,
     spawnIndex: index,
     strafe: index % 2 === 0 ? 1 : -1,
-    speedBias: (0.9 + index * 0.06) * roundScale,
+    speedBias: (isHeavy ? 0.55 : 0.9 + index * 0.06) * roundScale,
     awareness: 0,
     wanderTimer: 0.5 + index * 0.4,
     wanderAngle: Math.PI * 0.5 * index,
-    reactionTime: Math.max(0.28, 0.7 + index * 0.16 - (round - 1) * 0.06),
+    reactionTime: Math.max(0.28, (isHeavy ? 0.45 : 0.7) + index * 0.16 - (round - 1) * 0.06),
     turnSpeed: (1.7 + index * 0.12) * Math.min(1 + (round - 1) * 0.05, 1.5),
+    isHeavy,
   };
 }
 
@@ -179,6 +181,7 @@ function resetGame(running = true) {
     shakeTimer: 0,
     shakeY: 0,
     shakeIntensity: 0,
+    fov: Math.PI / 3,
     player: {
       x: TILE * 1.5,
       y: TILE * 1.5,
@@ -641,6 +644,18 @@ function switchWeapon() {
   setMessage(WEAPONS[player.weaponIndex].name, 0.8);
 }
 
+function selectWeapon(index) {
+  if (!game?.running || index === game.player.weaponIndex) return;
+  const player = game.player;
+  player.weaponIndex = index;
+  player.reloading = false;
+  player.reloadTimer = 0;
+  player.ammo = WEAPONS[index].ammoMax;
+  player.cooldown = 0.15;
+  playSound("weaponSwitch");
+  setMessage(WEAPONS[index].name, 0.8);
+}
+
 function shoot(shooter, target, isPlayer) {
   if (shooter.cooldown > 0 || shooter.health <= 0 || target.health <= 0) return;
   if (isPlayer && (game.player.reloading)) return;
@@ -943,6 +958,8 @@ function update(dt) {
   }
 
   const sprinting = !player.crouching && (keys.has("ShiftLeft") || keys.has("ShiftRight"));
+  const targetFOV = sprinting ? Math.PI / 2.62 : player.crouching ? Math.PI / 3.4 : Math.PI / 3;
+  game.fov += (targetFOV - game.fov) * Math.min(1, 7 * dt);
 
   let targetFwd = 0;
   if (keys.has("KeyW")) {
@@ -1154,6 +1171,7 @@ function render() {
   drawDamageIndicator();
   drawHitMarker();
   drawKillFeed();
+  drawCrosshair();
   drawRoundBanner();
   requestAnimationFrame(loop);
 }
@@ -1181,7 +1199,7 @@ function drawWorld() {
 
   const sliceW = w / RAYS + 1;
   for (let i = 0; i < RAYS; i++) {
-    const rayAngle = game.player.angle - FOV / 2 + (i / RAYS) * FOV;
+    const rayAngle = game.player.angle - game.fov / 2 + (i / RAYS) * game.fov;
     const hit = castRay(rayAngle);
     const corrected = hit.depth * Math.cos(rayAngle - game.player.angle);
     const wallH = Math.min(h * 1.35, (TILE * 620) / corrected);
@@ -1372,57 +1390,84 @@ function drawEnemy(enemy) {
 
   ctx.save();
   ctx.globalAlpha = deathAlpha;
-  ctx.shadowColor = hitGlow ? "rgba(255, 255, 255, 0.95)" : "rgba(255, 93, 108, 0.7)";
-  ctx.shadowBlur = hitGlow ? 34 : 22;
+  const heavy = enemy.isHeavy;
+  ctx.shadowColor = hitGlow ? "rgba(255, 255, 255, 0.95)" : heavy ? "rgba(255, 140, 0, 0.85)" : "rgba(255, 93, 108, 0.7)";
+  ctx.shadowBlur = hitGlow ? 34 : heavy ? 30 : 22;
 
+  const bodyC0 = hitGlow ? "#ffe2e5" : heavy ? "#ff9a3c" : "#ff7b86";
+  const bodyC1 = heavy ? "#b05000" : "#b92539";
+  const bodyC2 = heavy ? "#3a1a00" : "#3b1018";
   const body = ctx.createLinearGradient(x, y, x + size, y + size);
-  body.addColorStop(0, hitGlow ? "#ffe2e5" : "#ff7b86");
-  body.addColorStop(0.5, "#b92539");
-  body.addColorStop(1, "#3b1018");
+  body.addColorStop(0, bodyC0);
+  body.addColorStop(0.5, bodyC1);
+  body.addColorStop(1, bodyC2);
 
   ctx.fillStyle = "rgba(0, 0, 0, 0.34)";
   ctx.beginPath();
-  ctx.ellipse(x + size * 0.5, y + size * 1.04, size * 0.36, size * 0.08, 0, 0, Math.PI * 2);
+  ctx.ellipse(x + size * 0.5, y + size * 1.04, size * (heavy ? 0.44 : 0.36), size * 0.08, 0, 0, Math.PI * 2);
   ctx.fill();
 
   ctx.fillStyle = "#171b20";
-  ctx.fillRect(x + size * 0.2, y + size * 0.48, size * 0.12, size * 0.34);
-  ctx.fillRect(x + size * 0.68, y + size * 0.48, size * 0.12, size * 0.34);
+  ctx.fillRect(x + size * (heavy ? 0.14 : 0.2), y + size * 0.48, size * (heavy ? 0.14 : 0.12), size * 0.34);
+  ctx.fillRect(x + size * (heavy ? 0.72 : 0.68), y + size * 0.48, size * (heavy ? 0.14 : 0.12), size * 0.34);
   ctx.fillRect(x + size * 0.28, y + size * 0.82, size * 0.15, size * 0.26);
   ctx.fillRect(x + size * 0.57, y + size * 0.82, size * 0.15, size * 0.26);
 
   ctx.fillStyle = body;
   ctx.beginPath();
-  ctx.roundRect(x + size * 0.24, y + size * 0.25, size * 0.52, size * 0.62, size * 0.07);
+  ctx.roundRect(x + size * (heavy ? 0.16 : 0.24), y + size * (heavy ? 0.22 : 0.25), size * (heavy ? 0.68 : 0.52), size * (heavy ? 0.66 : 0.62), size * 0.07);
   ctx.fill();
 
-  ctx.fillStyle = "#252d35";
+  if (heavy) {
+    ctx.fillStyle = "rgba(255,140,0,0.22)";
+    ctx.beginPath();
+    ctx.roundRect(x + size * 0.2, y + size * 0.26, size * 0.6, size * 0.58, size * 0.06);
+    ctx.fill();
+    ctx.strokeStyle = "rgba(255,140,0,0.6)";
+    ctx.lineWidth = Math.max(1.5, size * 0.018);
+    ctx.beginPath();
+    ctx.roundRect(x + size * 0.2, y + size * 0.26, size * 0.6, size * 0.58, size * 0.06);
+    ctx.stroke();
+  }
+
+  ctx.fillStyle = heavy ? "#1e2830" : "#252d35";
   ctx.beginPath();
   ctx.roundRect(x + size * 0.3, y + size * 0.08, size * 0.4, size * 0.25, size * 0.08);
   ctx.fill();
 
-  ctx.fillStyle = "#ffccd1";
+  ctx.fillStyle = heavy ? "#ffddaa" : "#ffccd1";
   ctx.fillRect(x + size * 0.35, y + size * 0.17, size * 0.3, size * 0.055);
   ctx.fillStyle = "rgba(255, 255, 255, 0.75)";
   ctx.fillRect(x + size * 0.39, y + size * 0.18, size * 0.08, size * 0.02);
 
-  ctx.strokeStyle = "rgba(255, 206, 99, 0.8)";
-  ctx.lineWidth = Math.max(2, size * 0.025);
+  ctx.strokeStyle = heavy ? "rgba(255, 120, 0, 0.9)" : "rgba(255, 206, 99, 0.8)";
+  ctx.lineWidth = Math.max(2, size * (heavy ? 0.038 : 0.025));
   ctx.beginPath();
   ctx.moveTo(x + size * 0.34, y + size * 0.4);
   ctx.lineTo(x + size * 0.66, y + size * 0.4);
   ctx.stroke();
 
   ctx.fillStyle = "#0d1114";
-  ctx.fillRect(x + size * 0.68, y + size * 0.53, size * 0.18, size * 0.08);
-  ctx.fillStyle = "#ffce63";
-  ctx.fillRect(x + size * 0.82, y + size * 0.55, size * 0.08, size * 0.035);
+  ctx.fillRect(x + size * (heavy ? 0.62 : 0.68), y + size * 0.53, size * (heavy ? 0.24 : 0.18), size * 0.08);
+  ctx.fillStyle = heavy ? "#ff8800" : "#ffce63";
+  ctx.fillRect(x + size * (heavy ? 0.82 : 0.82), y + size * 0.55, size * (heavy ? 0.1 : 0.08), size * 0.035);
+
+  if (heavy) {
+    const labelSize = Math.max(9, size * 0.09);
+    ctx.shadowBlur = 8;
+    ctx.shadowColor = "#ff8800";
+    ctx.fillStyle = "#ffaa44";
+    ctx.font = `bold ${labelSize}px Inter, ui-sans-serif, sans-serif`;
+    ctx.textAlign = "center";
+    ctx.fillText("HEAVY", x + size * 0.5, y - size * 0.04);
+    ctx.textAlign = "left";
+  }
 
   if (enemy.health < enemy.maxHealth) {
     const barW = size * 0.58;
     const barH = Math.max(3, size * 0.044);
     const barX = x + size * 0.21;
-    const barY = y - barH - size * 0.02;
+    const barY = y - barH - size * (heavy ? 0.13 : 0.02);
     const pct = enemy.health / enemy.maxHealth;
 
     ctx.shadowBlur = 0;
@@ -1669,6 +1714,47 @@ function drawRoundBanner() {
   ctx.restore();
 }
 
+function drawCrosshair() {
+  const cx = canvas.width / 2;
+  const cy = canvas.height / 2;
+  const player = game.player;
+  const weapon = WEAPONS[player.weaponIndex];
+  const movSpeed = Math.hypot(player.vx, player.vy);
+  const bloom = clamp(movSpeed / PLAYER_WALK_SPEED, 0, 1.8) * (weapon.id === "shotgun" ? 10 : weapon.id === "smg" ? 5 : 3.5);
+  const reloading = player.reloading;
+
+  const gap = (weapon.id === "shotgun" ? 9 : weapon.id === "smg" ? 5 : 7) + bloom;
+  const len = weapon.id === "shotgun" ? 7 : weapon.id === "smg" ? 9 : 11;
+  const alpha = reloading ? 0.45 : player.cooldown > 0 ? 0.65 : 0.9;
+  const color = reloading ? "rgba(255,206,99," : `rgba(255,255,255,`;
+
+  ctx.save();
+  ctx.lineWidth = weapon.id === "shotgun" ? 2.5 : 2;
+  ctx.shadowColor = weapon.color;
+  ctx.shadowBlur = 7;
+  ctx.strokeStyle = `${color}${alpha})`;
+
+  ctx.beginPath();
+  ctx.moveTo(cx - gap - len, cy);
+  ctx.lineTo(cx - gap, cy);
+  ctx.moveTo(cx + gap, cy);
+  ctx.lineTo(cx + gap + len, cy);
+  ctx.moveTo(cx, cy - gap - len);
+  ctx.lineTo(cx, cy - gap);
+  ctx.moveTo(cx, cy + gap);
+  ctx.lineTo(cx, cy + gap + len);
+  ctx.stroke();
+
+  if (weapon.id === "smg") {
+    ctx.fillStyle = `rgba(255,255,255,${alpha * 0.9})`;
+    ctx.beginPath();
+    ctx.arc(cx, cy, 1.8, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  ctx.restore();
+}
+
 function drawScreenEffects() {
   const vignette = ctx.createRadialGradient(
     canvas.width / 2,
@@ -1763,6 +1849,10 @@ window.addEventListener("keydown", (event) => {
   if (event.code === "KeyQ") {
     switchWeapon();
   }
+
+  if (event.code === "Digit1") selectWeapon(0);
+  if (event.code === "Digit2") selectWeapon(1);
+  if (event.code === "Digit3") selectWeapon(2);
 });
 
 window.addEventListener("keyup", (event) => {
