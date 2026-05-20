@@ -41,6 +41,8 @@ const PLAYER_STRAFE_SPEED = 130;
 const PLAYER_SPRINT_SPEED = 228;
 const PLAYER_CROUCH_SPEED = 72;
 const PLAYER_ACCEL = 13;
+const JUMP_FORCE = 260;
+const GRAVITY = 580;
 
 const WEAPONS = [
   {
@@ -106,6 +108,7 @@ function createEnemy(spawn, index, round = 1) {
     cooldown: 0.8 + index * 0.22,
     hitTimer: 0,
     suppressTimer: 0,
+    deathTimer: 0,
     strafe: index % 2 === 0 ? 1 : -1,
     speedBias: (0.9 + index * 0.06) * roundScale,
     awareness: 0,
@@ -147,6 +150,9 @@ function resetGame(running = true) {
       reloading: false,
       reloadTimer: 0,
       crouching: false,
+      jumpVelocity: 0,
+      jumpHeight: 0,
+      onGround: true,
     },
     enemies: spawnEnemiesForRound(1),
     healthPacks: [],
@@ -222,7 +228,8 @@ function clamp(value, min, max) {
 
 function getHorizon() {
   const crouchShift = game.player.crouching ? canvas.height * 0.055 : 0;
-  return canvas.height * (0.5 - game.player.pitch * 0.42) + crouchShift;
+  const jumpShift = -game.player.jumpHeight * 0.38;
+  return canvas.height * (0.5 - game.player.pitch * 0.42) + crouchShift + jumpShift;
 }
 
 function getLivingEnemies() {
@@ -427,6 +434,30 @@ function playSound(type) {
     return;
   }
 
+  if (type === "jump") {
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(180, now);
+    osc.frequency.exponentialRampToValueAtTime(280, now + 0.06);
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(0.07, now + 0.005);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.1);
+    osc.start(now);
+    osc.stop(now + 0.11);
+    return;
+  }
+
+  if (type === "land") {
+    osc.type = "triangle";
+    osc.frequency.setValueAtTime(95, now);
+    osc.frequency.exponentialRampToValueAtTime(42, now + 0.09);
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(0.09, now + 0.008);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.11);
+    osc.start(now);
+    osc.stop(now + 0.12);
+    return;
+  }
+
   if (type === "footstep") {
     osc.type = "triangle";
     osc.frequency.setValueAtTime(85, now);
@@ -578,10 +609,17 @@ function shoot(shooter, target, isPlayer) {
 
     if (canHit) {
       totalDamage += isPlayer ? weapon.damage : 12;
+    } else if (isPlayer) {
+      const wallHit = castRay(pelletAngle);
+      if (wallHit.depth < MAX_DEPTH * 0.96) {
+        addWallSparks(wallHit.x, wallHit.y);
+      }
     }
 
     addShotParticles(shooter, pelletAngle, isPlayer);
   }
+
+  if (isPlayer) addShellCasing(shooter);
 
   if (totalDamage > 0) {
     const wasAlive = target.health > 0;
@@ -593,6 +631,7 @@ function shoot(shooter, target, isPlayer) {
 
       if (wasAlive && target.health <= 0) {
         addDeathParticles(target);
+        target.deathTimer = 0.7;
         playSound("kill");
         game.kills++;
         game.score += 100 * game.round;
@@ -647,6 +686,32 @@ function addDeathParticles(enemy) {
       color: Math.random() > 0.45 ? "#ff5d6c" : "#ffce63",
     });
   }
+}
+
+function addWallSparks(x, y) {
+  for (let i = 0; i < 6; i++) {
+    const angle = Math.random() * Math.PI * 2;
+    const speed = 35 + Math.random() * 75;
+    game.particles.push({
+      x, y,
+      dx: Math.cos(angle) * speed,
+      dy: Math.sin(angle) * speed,
+      life: 0.18 + Math.random() * 0.14,
+      color: Math.random() > 0.45 ? "#ffce63" : "#c8c8c8",
+    });
+  }
+}
+
+function addShellCasing(shooter) {
+  const ejectAngle = shooter.angle + Math.PI / 2 + (Math.random() - 0.5) * 0.5;
+  game.particles.push({
+    x: shooter.x,
+    y: shooter.y,
+    dx: Math.cos(ejectAngle) * (55 + Math.random() * 35),
+    dy: Math.sin(ejectAngle) * (55 + Math.random() * 35),
+    life: 0.55 + Math.random() * 0.25,
+    color: "#d4a300",
+  });
 }
 
 function setMessage(text, seconds) {
@@ -729,7 +794,24 @@ function update(dt) {
     enemy.hitTimer = Math.max(0, enemy.hitTimer - dt);
   }
 
-  player.crouching = keys.has("KeyC");
+  player.crouching = keys.has("KeyC") && player.onGround;
+
+  if (player.onGround && keys.has("Space") && !player.crouching) {
+    player.jumpVelocity = JUMP_FORCE;
+    player.onGround = false;
+    playSound("jump");
+  }
+
+  if (!player.onGround) {
+    player.jumpVelocity -= GRAVITY * dt;
+    player.jumpHeight += player.jumpVelocity * dt;
+    if (player.jumpHeight <= 0) {
+      player.jumpHeight = 0;
+      player.jumpVelocity = 0;
+      player.onGround = true;
+      if (Math.hypot(player.vx, player.vy) > 30) playSound("land");
+    }
+  }
 
   if (player.reloading) {
     player.reloadTimer -= dt;
@@ -824,7 +906,11 @@ function updateHealthPacks(dt) {
 
 function updateEnemies(dt) {
   for (const enemy of game.enemies) {
-    updateEnemy(enemy, dt);
+    if (enemy.health <= 0) {
+      enemy.deathTimer = Math.max(0, enemy.deathTimer - dt);
+    } else {
+      updateEnemy(enemy, dt);
+    }
   }
 }
 
@@ -903,6 +989,7 @@ function render() {
   drawScreenEffects();
   drawDamageIndicator();
   drawHitMarker();
+  drawRoundBanner();
   requestAnimationFrame(loop);
 }
 
@@ -992,7 +1079,8 @@ function drawFloorGrid(horizon) {
 }
 
 function drawEnemies() {
-  const enemiesToDraw = getLivingEnemies()
+  const enemiesToDraw = game.enemies
+    .filter((e) => e.health > 0 || e.deathTimer > 0)
     .map((enemy) => ({
       enemy,
       dist: Math.hypot(enemy.x - game.player.x, enemy.y - game.player.y),
@@ -1049,7 +1137,7 @@ function drawHealthPacks() {
 }
 
 function drawEnemy(enemy) {
-  if (enemy.health <= 0) return;
+  const dying = enemy.health <= 0 && enemy.deathTimer > 0;
 
   const dx = enemy.x - game.player.x;
   const dy = enemy.y - game.player.y;
@@ -1059,11 +1147,14 @@ function drawEnemy(enemy) {
   if (Math.abs(angle) > FOV * 0.62 || !hasLineOfSight(game.player, enemy)) return;
 
   const size = Math.min(canvas.height * 0.65, (TILE * 420) / dist);
+  const deathAlpha = dying ? enemy.deathTimer / 0.7 : 1;
+  const deathDrop = dying ? (1 - deathAlpha) * size * 0.5 : 0;
   const x = canvas.width / 2 + (angle / (FOV / 2)) * (canvas.width / 2) - size / 2;
-  const y = getHorizon() - size * 0.5;
+  const y = getHorizon() - size * 0.5 + deathDrop;
   const hitGlow = enemy.hitTimer > 0 ? 1 : 0;
 
   ctx.save();
+  ctx.globalAlpha = deathAlpha;
   ctx.shadowColor = hitGlow ? "rgba(255, 255, 255, 0.95)" : "rgba(255, 93, 108, 0.7)";
   ctx.shadowBlur = hitGlow ? 34 : 22;
 
@@ -1184,7 +1275,7 @@ function drawWeapon() {
   const reloadBob = player.reloading ? Math.sin(performance.now() / 90) * 8 : 0;
 
   ctx.save();
-  ctx.translate(w * 0.5 + sway, h + bob + reloadBob + player.pitch * h * 0.14);
+  ctx.translate(w * 0.5 + sway, h + bob + reloadBob + player.pitch * h * 0.14 - player.jumpHeight * 0.28);
 
   if (weapon.id === "shotgun") {
     drawShotgunModel();
@@ -1299,6 +1390,27 @@ function drawHitMarker() {
   ctx.restore();
 }
 
+function drawRoundBanner() {
+  if (game.roundTransitionTimer <= 0) return;
+
+  const t = game.roundTransitionTimer / 3.2;
+  const alpha = Math.min(1, t * 3) * Math.min(1, (1 - t) * 6 + 0.3);
+  ctx.save();
+  ctx.fillStyle = `rgba(0, 0, 0, ${alpha * 0.55})`;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  ctx.textAlign = "center";
+  ctx.fillStyle = `rgba(32, 215, 181, ${alpha})`;
+  ctx.font = `bold ${Math.round(canvas.width * 0.055)}px Inter, ui-sans-serif, sans-serif`;
+  ctx.fillText(`ROUND ${game.round} CLEAR`, canvas.width / 2, canvas.height * 0.41);
+
+  ctx.fillStyle = `rgba(255, 206, 99, ${alpha * 0.9})`;
+  ctx.font = `${Math.round(canvas.width * 0.032)}px Inter, ui-sans-serif, sans-serif`;
+  ctx.fillText(`+${(500 * game.round).toLocaleString()} POINTS`, canvas.width / 2, canvas.height * 0.52);
+  ctx.fillText(`Round ${game.round + 1} incoming...`, canvas.width / 2, canvas.height * 0.62);
+  ctx.restore();
+}
+
 function drawScreenEffects() {
   const vignette = ctx.createRadialGradient(
     canvas.width / 2,
@@ -1375,7 +1487,7 @@ function loop(time) {
 }
 
 window.addEventListener("keydown", (event) => {
-  const moveKeys = ["KeyW", "KeyA", "KeyS", "KeyD", "ShiftLeft", "ShiftRight", "KeyC"];
+  const moveKeys = ["KeyW", "KeyA", "KeyS", "KeyD", "ShiftLeft", "ShiftRight", "KeyC", "Space"];
   if (moveKeys.includes(event.code)) {
     event.preventDefault();
     keys.add(event.code);
