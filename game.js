@@ -210,6 +210,7 @@ function resetGame(running = true) {
     armorPackTimer: 12,
     particles: [],
     tracers: [],
+    ammoPacks: [],
     ambientNode: null,
     ambientGain: null,
   };
@@ -610,6 +611,36 @@ function playSound(type) {
     return;
   }
 
+  if (type === "enemyHurt") {
+    osc.type = "sawtooth";
+    osc.frequency.setValueAtTime(180, now);
+    osc.frequency.exponentialRampToValueAtTime(100, now + 0.07);
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(0.07, now + 0.008);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.09);
+    osc.start(now);
+    osc.stop(now + 0.1);
+    return;
+  }
+
+  if (type === "ammoPickup") {
+    [520, 680].forEach((freq, i) => {
+      const n = audioCtx.createOscillator();
+      const g = audioCtx.createGain();
+      const t = now + i * 0.055;
+      n.type = "sine";
+      n.frequency.setValueAtTime(freq, t);
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(0.09, t + 0.005);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.08);
+      n.connect(g);
+      g.connect(audioCtx.destination);
+      n.start(t);
+      n.stop(t + 0.09);
+    });
+    return;
+  }
+
   if (type === "smgShot") {
     osc.type = "sawtooth";
     osc.frequency.setValueAtTime(1100, now);
@@ -799,6 +830,9 @@ function shoot(shooter, target, isPlayer) {
         addDeathParticles(target);
         target.deathTimer = 0.7;
         playSound("kill");
+        if (Math.random() < 0.55) {
+          game.ammoPacks.push({ x: target.x, y: target.y, pulse: 0 });
+        }
         game.kills++;
         const killScore = headshot ? 200 * game.round : 100 * game.round;
         game.score += killScore;
@@ -809,15 +843,17 @@ function shoot(shooter, target, isPlayer) {
         const feedLabel = headshot ? "HEADSHOT KILL" : "Kill";
         game.killFeed.unshift({ text: `${feedLabel}  +${killScore}`, timer: 4.0 });
         if (game.killFeed.length > 4) game.killFeed.pop();
-      } else if (headshot) {
-        game.score += 25;
-        game.hitMarkerTimer = 0.35;
+      } else if (wasAlive) {
+        playSound("enemyHurt");
+        if (headshot) {
+          game.score += 25;
+          game.hitMarkerTimer = 0.35;
+          setMessage(`HEADSHOT! ${totalDamage}`, 0.6);
+        } else {
+          game.score += 10;
+          setMessage(`Hit ${totalDamage}`, 0.45);
+        }
         playSound("hit");
-        setMessage(`HEADSHOT! ${totalDamage}`, 0.6);
-      } else {
-        game.score += 10;
-        playSound("hit");
-        setMessage(`Hit ${totalDamage}`, 0.45);
       }
     } else {
       game.damageTimer = 0.45;
@@ -975,6 +1011,7 @@ function update(dt) {
       game.enemies = spawnEnemiesForRound(game.round);
       game.healthPacks = [];
       game.armorPacks = [];
+      game.ammoPacks = [];
       spawnHealthPack();
       spawnHealthPack();
       spawnArmorPack();
@@ -1061,6 +1098,10 @@ function update(dt) {
     }
   }
 
+  if (player.cooldown <= 0 && player.pitch < 0) {
+    player.pitch = Math.min(0, player.pitch + 2.8 * dt);
+  }
+
   const timeSinceDamage = game.elapsed - player.lastDamageTime;
   if (timeSinceDamage > 5.0 && player.health > 0 && player.health < 30) {
     player.health = Math.min(30, player.health + 6 * dt);
@@ -1074,6 +1115,7 @@ function update(dt) {
 
   updateHealthPacks(dt);
   updateArmorPacks(dt);
+  updateAmmoPacks(dt);
   updateEnemies(dt);
   updateParticles(dt);
   updateHud();
@@ -1103,6 +1145,24 @@ function updateHealthPacks(dt) {
       return false;
     }
 
+    return true;
+  });
+}
+
+function updateAmmoPacks(dt) {
+  game.ammoPacks = game.ammoPacks.filter((pack) => {
+    pack.pulse += dt * 5;
+    pack.life = (pack.life || 14) - dt;
+    if (pack.life <= 0) return false;
+    const touching = Math.hypot(pack.x - game.player.x, pack.y - game.player.y) < 28;
+    if (touching) {
+      const weapon = WEAPONS[game.player.weaponIndex];
+      const refill = Math.ceil(weapon.ammoMax * 0.6);
+      game.player.ammo = Math.min(weapon.ammoMax, game.player.ammo + refill);
+      setMessage(`Ammo +${refill}`, 0.7);
+      playSound("ammoPickup");
+      return false;
+    }
     return true;
   });
 }
@@ -1231,6 +1291,7 @@ function render() {
   drawWorld();
   drawHealthPacks();
   drawArmorPacks();
+  drawAmmoPacks();
   drawEnemies();
   drawEnemyIndicator();
   drawTracers();
@@ -1436,6 +1497,47 @@ function drawArmorPacks() {
     ctx.lineTo(cx - r * 0.7, cy - r * 0.3);
     ctx.closePath();
     ctx.fill();
+    ctx.restore();
+  }
+}
+
+function drawAmmoPacks() {
+  for (const pack of game.ammoPacks) {
+    const dx = pack.x - game.player.x;
+    const dy = pack.y - game.player.y;
+    const dist = Math.hypot(dx, dy);
+    const angle = normalizeAngle(Math.atan2(dy, dx) - game.player.angle);
+
+    if (Math.abs(angle) > FOV * 0.58 || !hasLineOfSight(game.player, pack)) continue;
+
+    const size = Math.min(canvas.height * 0.2, (TILE * 155) / dist);
+    const x = canvas.width / 2 + (angle / (FOV / 2)) * (canvas.width / 2) - size / 2;
+    const y = getHorizon() + size * 0.32 + Math.sin(pack.pulse) * size * 0.07;
+
+    ctx.save();
+    ctx.shadowColor = "rgba(255, 206, 99, 0.85)";
+    ctx.shadowBlur = 18;
+
+    ctx.fillStyle = "rgba(0, 0, 0, 0.3)";
+    ctx.beginPath();
+    ctx.ellipse(x + size * 0.5, y + size * 0.86, size * 0.36, size * 0.09, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = "#211800";
+    ctx.beginPath();
+    ctx.roundRect(x + size * 0.18, y + size * 0.18, size * 0.64, size * 0.56, size * 0.1);
+    ctx.fill();
+    ctx.strokeStyle = "#ffce63";
+    ctx.lineWidth = Math.max(2, size * 0.035);
+    ctx.stroke();
+
+    ctx.fillStyle = "#ffce63";
+    ctx.font = `bold ${Math.max(8, size * 0.32)}px Inter, ui-sans-serif, sans-serif`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText("AMM", x + size * 0.5, y + size * 0.46);
+    ctx.textAlign = "left";
+    ctx.textBaseline = "alphabetic";
     ctx.restore();
   }
 }
