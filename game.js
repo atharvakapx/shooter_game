@@ -9,7 +9,8 @@ const weaponChargeBar = document.querySelector("#weaponChargeBar");
 const weaponStateEl = document.querySelector("#weaponState");
 const weaponNameEl = document.querySelector("#weaponName");
 const enemyDistanceEl = document.querySelector("#enemyDistance");
-const matchTimerEl = document.querySelector("#matchTimer");
+const roundLabelEl = document.querySelector("#roundLabel");
+const scoreEl = document.querySelector("#scoreEl");
 const statusText = document.querySelector("#statusText");
 
 const keys = new Set();
@@ -79,6 +80,10 @@ const enemySpawns = [
   { x: TILE * 9.5, y: TILE * 1.5 },
   { x: TILE * 7.5, y: TILE * 5.5 },
   { x: TILE * 3.5, y: TILE * 6.5 },
+  { x: TILE * 6.5, y: TILE * 7.5 },
+  { x: TILE * 2.5, y: TILE * 4.5 },
+  { x: TILE * 9.5, y: TILE * 6.5 },
+  { x: TILE * 5.5, y: TILE * 1.5 },
 ];
 
 const healthPackCells = [
@@ -90,21 +95,24 @@ const healthPackCells = [
   { x: 10, y: 7 },
 ];
 
-function createEnemy(spawn, index) {
+function createEnemy(spawn, index, round = 1) {
+  const roundScale = 1 + (round - 1) * 0.12;
   return {
     x: spawn.x,
     y: spawn.y,
     angle: Math.PI + index * 0.35,
-    health: 100,
+    health: Math.round(100 + (round - 1) * 18),
+    maxHealth: Math.round(100 + (round - 1) * 18),
     cooldown: 0.8 + index * 0.22,
     hitTimer: 0,
+    suppressTimer: 0,
     strafe: index % 2 === 0 ? 1 : -1,
-    speedBias: 0.9 + index * 0.06,
+    speedBias: (0.9 + index * 0.06) * roundScale,
     awareness: 0,
     wanderTimer: 0.5 + index * 0.4,
     wanderAngle: Math.PI * 0.5 * index,
-    reactionTime: 0.7 + index * 0.16,
-    turnSpeed: 1.7 + index * 0.12,
+    reactionTime: Math.max(0.28, 0.7 + index * 0.16 - (round - 1) * 0.06),
+    turnSpeed: (1.7 + index * 0.12) * Math.min(1 + (round - 1) * 0.05, 1.5),
   };
 }
 
@@ -118,6 +126,12 @@ function resetGame(running = true) {
     damageAngle: 0,
     hitMarkerTimer: 0,
     elapsed: 0,
+    round: 1,
+    score: 0,
+    kills: 0,
+    roundTransitionTimer: 0,
+    killStreakCount: 0,
+    killStreakTimer: 0,
     player: {
       x: TILE * 1.5,
       y: TILE * 1.5,
@@ -134,7 +148,7 @@ function resetGame(running = true) {
       reloadTimer: 0,
       crouching: false,
     },
-    enemies: enemySpawns.map(createEnemy),
+    enemies: spawnEnemiesForRound(1),
     healthPacks: [],
     healthPackTimer: 1.5,
     particles: [],
@@ -146,6 +160,11 @@ function resetGame(running = true) {
   updateHud();
   keys.clear();
   if (running) playSound("start");
+}
+
+function spawnEnemiesForRound(round) {
+  const count = Math.min(enemySpawns.length, 3 + round);
+  return enemySpawns.slice(0, count).map((spawn, i) => createEnemy(spawn, i, round));
 }
 
 function isWall(x, y) {
@@ -575,8 +594,14 @@ function shoot(shooter, target, isPlayer) {
       if (wasAlive && target.health <= 0) {
         addDeathParticles(target);
         playSound("kill");
-        setMessage("Kill!", 0.8);
+        game.kills++;
+        game.score += 100 * game.round;
+        game.killStreakTimer = 3.5;
+        game.killStreakCount++;
+        const streakMsg = game.killStreakCount === 2 ? "Double Kill!" : game.killStreakCount === 3 ? "Triple Kill!" : game.killStreakCount >= 4 ? "MULTI KILL!" : "Kill!";
+        setMessage(streakMsg, 1.0);
       } else {
+        game.score += 10;
         playSound("hit");
         setMessage(`Hit ${totalDamage}`, 0.45);
       }
@@ -630,15 +655,17 @@ function setMessage(text, seconds) {
 }
 
 function checkWinner() {
-  if (getLivingEnemies().length === 0) {
+  if (game.player.health <= 0 && game.running) {
     game.running = false;
-    statusText.textContent = "You win";
-    playSound("win");
-  }
-  if (game.player.health <= 0) {
-    game.running = false;
-    statusText.textContent = "CPU wins";
+    statusText.textContent = `Game Over  Score: ${game.score}`;
     playSound("lose");
+    return;
+  }
+  if (getLivingEnemies().length === 0 && game.running && game.roundTransitionTimer <= 0) {
+    game.roundTransitionTimer = 3.2;
+    statusText.textContent = `Round ${game.round} Clear!`;
+    game.score += 500 * game.round;
+    playSound("win");
   }
 }
 
@@ -655,6 +682,8 @@ function updateHud() {
   enemyHealthBar.style.width = `${totalEnemyHealth / game.enemies.length}%`;
 
   weaponNameEl.textContent = weapon.name;
+  roundLabelEl.textContent = `ROUND ${game.round}`;
+  scoreEl.textContent = game.score;
 
   if (player.reloading) {
     const progress = 1 - player.reloadTimer / weapon.reloadTime;
@@ -667,10 +696,6 @@ function updateHud() {
   }
 
   enemyDistanceEl.textContent = nearest ? `${Math.round(nearest.dist / TILE * 5)}m` : "--m";
-
-  const minutes = Math.floor(game.elapsed / 60);
-  const seconds = Math.floor(game.elapsed % 60).toString().padStart(2, "0");
-  matchTimerEl.textContent = `${minutes}:${seconds}`;
 }
 
 function update(dt) {
@@ -683,6 +708,22 @@ function update(dt) {
   game.flashTimer = Math.max(0, game.flashTimer - dt);
   game.damageTimer = Math.max(0, game.damageTimer - dt);
   game.hitMarkerTimer = Math.max(0, game.hitMarkerTimer - dt);
+  game.killStreakTimer = Math.max(0, game.killStreakTimer - dt);
+  if (game.killStreakTimer <= 0) game.killStreakCount = 0;
+
+  if (game.roundTransitionTimer > 0) {
+    game.roundTransitionTimer -= dt;
+    if (game.roundTransitionTimer <= 0) {
+      game.round++;
+      game.enemies = spawnEnemiesForRound(game.round);
+      game.healthPacks = [];
+      spawnHealthPack();
+      spawnHealthPack();
+      setMessage(`Round ${game.round}`, 2.0);
+      playSound("start");
+    }
+  }
+
   for (const enemy of game.enemies) {
     enemy.cooldown = Math.max(0, enemy.cooldown - dt);
     enemy.hitTimer = Math.max(0, enemy.hitTimer - dt);
@@ -805,6 +846,12 @@ function updateEnemy(enemy, dt) {
     enemy.awareness = Math.max(0, enemy.awareness - dt * 0.65);
   }
 
+  if (enemy.hitTimer > 0 && enemy.suppressTimer <= 0) {
+    enemy.suppressTimer = 1.4 + Math.random() * 1.0;
+    enemy.strafe *= -1;
+  }
+  enemy.suppressTimer = Math.max(0, enemy.suppressTimer - dt);
+
   if (Math.random() < 0.01) enemy.strafe *= -1;
 
   enemy.wanderTimer -= dt;
@@ -814,18 +861,25 @@ function updateEnemy(enemy, dt) {
   }
 
   const trackingPlayer = enemy.awareness > 0.25 && clearSight;
+  const suppressed = enemy.suppressTimer > 0;
   const desiredAim = trackingPlayer ? angleToPlayer : enemy.wanderAngle;
   enemy.angle = rotateToward(enemy.angle, desiredAim, enemy.turnSpeed * dt);
 
   let moveAngle = trackingPlayer ? angleToPlayer : enemy.wanderAngle;
   if (trackingPlayer && dist < 190) moveAngle += Math.PI;
-  if (trackingPlayer && dist >= 190 && dist <= 330) moveAngle += Math.PI / 2 * enemy.strafe;
+  if (suppressed) {
+    moveAngle += Math.PI * 0.55 * enemy.strafe;
+  } else if (trackingPlayer && dist >= 190 && dist <= 330) {
+    moveAngle += Math.PI / 2 * enemy.strafe;
+  }
 
-  const speed = (trackingPlayer ? 58 : 36) * enemy.speedBias;
+  const baseSpeed = suppressed ? 74 : trackingPlayer ? 58 : 36;
+  const speed = baseSpeed * enemy.speedBias;
   moveEntity(enemy, Math.cos(moveAngle) * speed * dt, Math.sin(moveAngle) * speed * dt);
 
   const finalAimError = Math.abs(normalizeAngle(angleToPlayer - enemy.angle));
-  const readyToFire = clearSight && enemy.awareness > enemy.reactionTime && finalAimError < 0.18 && Math.random() > 0.28;
+  const fireSuppression = suppressed ? 0.72 : 0.28;
+  const readyToFire = clearSight && enemy.awareness > enemy.reactionTime && finalAimError < 0.18 && Math.random() > fireSuppression;
   if (readyToFire) shoot(enemy, player, false);
 }
 
@@ -1055,6 +1109,21 @@ function drawEnemy(enemy) {
   ctx.fillRect(x + size * 0.68, y + size * 0.53, size * 0.18, size * 0.08);
   ctx.fillStyle = "#ffce63";
   ctx.fillRect(x + size * 0.82, y + size * 0.55, size * 0.08, size * 0.035);
+
+  if (enemy.health < enemy.maxHealth) {
+    const barW = size * 0.58;
+    const barH = Math.max(3, size * 0.044);
+    const barX = x + size * 0.21;
+    const barY = y - barH - size * 0.02;
+    const pct = enemy.health / enemy.maxHealth;
+
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = "rgba(0, 0, 0, 0.65)";
+    ctx.fillRect(barX - 1, barY - 1, barW + 2, barH + 2);
+    ctx.fillStyle = pct > 0.6 ? "#4dff9f" : pct > 0.3 ? "#ffce63" : "#ff5d6c";
+    ctx.fillRect(barX, barY, barW * pct, barH);
+  }
+
   ctx.restore();
 }
 
