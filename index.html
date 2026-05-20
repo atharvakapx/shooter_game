@@ -14,11 +14,16 @@
         <div class="hud hud-top">
           <div class="hud-card vital-card">
             <div class="readout">
-              <span>YOU</span>
+              <span>HP</span>
               <strong id="playerHealth">100</strong>
+              <span>ARM</span>
+              <strong id="playerArmor">0</strong>
             </div>
             <div class="meter" aria-hidden="true">
               <div id="playerHealthBar" class="meter-fill player-fill"></div>
+            </div>
+            <div class="meter" aria-hidden="true">
+              <div id="playerArmorBar" class="meter-fill armor-fill"></div>
             </div>
           </div>
 
@@ -26,8 +31,8 @@
 
           <div class="hud-card vital-card">
             <div class="readout">
-              <span>BOTS</span>
-              <strong id="enemyHealth">100</strong>
+              <span id="roundLabel">ROUND 1</span>
+              <strong id="enemyHealth">4/4</strong>
             </div>
             <div class="meter" aria-hidden="true">
               <div id="enemyHealthBar" class="meter-fill enemy-fill"></div>
@@ -38,8 +43,8 @@
         <div class="hud hud-bottom">
           <div class="hud-card weapon-card">
             <div class="readout">
-              <span>BLASTER</span>
-              <strong id="weaponState">Ready</strong>
+              <span id="weaponName">RIFLE</span>
+              <strong id="weaponState">30</strong>
             </div>
             <div class="meter" aria-hidden="true">
               <div id="weaponChargeBar" class="meter-fill weapon-fill"></div>
@@ -54,15 +59,19 @@
               <strong id="enemyDistance">--m</strong>
             </div>
             <div>
-              <span>TIME</span>
-              <strong id="matchTimer">0:00</strong>
+              <span>SCORE</span>
+              <strong id="scoreEl">0</strong>
             </div>
           </div>
         </div>
 
         <div class="hud-card controls-card">
           <span>WASD MOVE</span>
-          <span>MOUSE LOOK</span>
+          <span>SHIFT SPRINT</span>
+          <span>SPACE JUMP</span>
+          <span>C CROUCH</span>
+          <span>Q WEAPON</span>
+          <span>R RELOAD</span>
           <span>CLICK FIRE</span>
         </div>
 
