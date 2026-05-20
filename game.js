@@ -209,6 +209,9 @@ function resetGame(running = true) {
     armorPacks: [],
     armorPackTimer: 12,
     particles: [],
+    tracers: [],
+    ambientNode: null,
+    ambientGain: null,
   };
   spawnHealthPack();
   spawnHealthPack();
@@ -217,7 +220,10 @@ function resetGame(running = true) {
   startBtn.textContent = running ? "Restart" : "Start";
   updateHud();
   keys.clear();
-  if (running) playSound("start");
+  if (running) {
+    playSound("start");
+    startAmbientDrone();
+  }
 }
 
 function spawnEnemiesForRound(round) {
@@ -604,6 +610,18 @@ function playSound(type) {
     return;
   }
 
+  if (type === "smgShot") {
+    osc.type = "sawtooth";
+    osc.frequency.setValueAtTime(1100, now);
+    osc.frequency.exponentialRampToValueAtTime(320, now + 0.07);
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(0.12, now + 0.005);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.09);
+    osc.start(now);
+    osc.stop(now + 0.1);
+    return;
+  }
+
   if (type === "win" || type === "lose" || type === "start") {
     const notes = type === "win" ? [440, 660, 880] : type === "lose" ? [240, 170, 120] : [260, 390];
     notes.forEach((note, index) => {
@@ -621,6 +639,41 @@ function playSound(type) {
       noteOsc.stop(start + 0.15);
     });
   }
+}
+
+function startAmbientDrone() {
+  if (!audioCtx) return;
+  if (game.ambientNode) {
+    try { game.ambientNode.stop(); } catch (_) {}
+  }
+  const osc = audioCtx.createOscillator();
+  const lfo = audioCtx.createOscillator();
+  const lfoGain = audioCtx.createGain();
+  const gainNode = audioCtx.createGain();
+  osc.type = "sine";
+  osc.frequency.setValueAtTime(48, audioCtx.currentTime);
+  lfo.type = "sine";
+  lfo.frequency.setValueAtTime(0.18, audioCtx.currentTime);
+  lfoGain.gain.setValueAtTime(3, audioCtx.currentTime);
+  gainNode.gain.setValueAtTime(0.0001, audioCtx.currentTime);
+  gainNode.gain.linearRampToValueAtTime(0.06, audioCtx.currentTime + 2.5);
+  lfo.connect(lfoGain);
+  lfoGain.connect(osc.frequency);
+  osc.connect(gainNode);
+  gainNode.connect(audioCtx.destination);
+  lfo.start();
+  osc.start();
+  game.ambientNode = osc;
+  game.ambientGain = gainNode;
+}
+
+function stopAmbientDrone() {
+  if (!game?.ambientGain) return;
+  const now = audioCtx.currentTime;
+  game.ambientGain.gain.linearRampToValueAtTime(0.0001, now + 1.0);
+  try { game.ambientNode.stop(now + 1.1); } catch (_) {}
+  game.ambientNode = null;
+  game.ambientGain = null;
 }
 
 function startReload() {
@@ -672,7 +725,7 @@ function shoot(shooter, target, isPlayer) {
   if (isPlayer) {
     game.player.ammo--;
     shooter.pitch = clamp(shooter.pitch - weapon.recoil, -MAX_PITCH, MAX_PITCH);
-    playSound(weapon.id === "shotgun" ? "shotgunShot" : "playerShot");
+    playSound(weapon.id === "shotgun" ? "shotgunShot" : weapon.id === "smg" ? "smgShot" : "playerShot");
     if (weapon.id === "shotgun") {
       game.shakeTimer = 0.09;
       game.shakeIntensity = 0.014;
@@ -707,10 +760,16 @@ function shoot(shooter, target, isPlayer) {
       const headshot = isPlayer && pellets === 1 && isHeadshot(target);
       totalDamage += isPlayer ? (headshot ? weapon.damage * 2 : weapon.damage) : 12;
       if (headshot) game._lastShotHeadshot = true;
+      if (isPlayer) addTracer(shooter, target.x, target.y, weapon.color);
     } else if (isPlayer) {
       const wallHit = castRay(pelletAngle);
       if (wallHit.depth < MAX_DEPTH * 0.96) {
         addWallSparks(wallHit.x, wallHit.y);
+        addTracer(shooter, wallHit.x, wallHit.y, weapon.color);
+      } else {
+        const missX = shooter.x + Math.cos(pelletAngle) * MAX_DEPTH * 0.7;
+        const missY = shooter.y + Math.sin(pelletAngle) * MAX_DEPTH * 0.7;
+        addTracer(shooter, missX, missY, weapon.color);
       }
     }
 
@@ -833,6 +892,10 @@ function addShellCasing(shooter) {
   });
 }
 
+function addTracer(shooter, tx, ty, color) {
+  game.tracers.push({ sx: shooter.x, sy: shooter.y, tx, ty, life: 0.09, max: 0.09, color });
+}
+
 function setMessage(text, seconds) {
   statusText.textContent = text;
   game.messageTimer = seconds;
@@ -843,6 +906,7 @@ function checkWinner() {
     game.running = false;
     statusText.textContent = `Round ${game.round} · ${game.kills} kills · ${game.score} pts`;
     playSound("lose");
+    stopAmbientDrone();
     return;
   }
   if (getLivingEnemies().length === 0 && game.running && game.roundTransitionTimer <= 0) {
@@ -1156,6 +1220,10 @@ function updateParticles(dt) {
     particle.y += particle.dy * dt;
     return particle.life > 0 && !isWall(particle.x, particle.y);
   });
+  game.tracers = game.tracers.filter((t) => {
+    t.life -= dt;
+    return t.life > 0;
+  });
 }
 
 function render() {
@@ -1165,6 +1233,7 @@ function render() {
   drawArmorPacks();
   drawEnemies();
   drawEnemyIndicator();
+  drawTracers();
   drawWeapon();
   drawMiniMap();
   drawScreenEffects();
@@ -1523,6 +1592,38 @@ function drawParticles3D() {
   }
 }
 
+function drawTracers() {
+  if (game.tracers.length === 0) return;
+  const player = game.player;
+  const horizon = getHorizon();
+  ctx.save();
+  for (const t of game.tracers) {
+    const alpha = (t.life / t.max) * 0.72;
+    const ex = t.tx - player.x;
+    const ey = t.ty - player.y;
+    const eAngle = normalizeAngle(Math.atan2(ey, ex) - player.angle);
+    if (Math.abs(eAngle) > FOV * 0.65) continue;
+    const endX = canvas.width / 2 + (eAngle / (game.fov / 2)) * (canvas.width / 2);
+    const endY = horizon;
+    const startX = canvas.width / 2;
+    const startY = canvas.height * 0.68;
+    const prog = 1 - t.life / t.max;
+    const tx0 = startX + (endX - startX) * prog * 0.3;
+    const ty0 = startY + (endY - startY) * prog * 0.3;
+    ctx.globalAlpha = alpha;
+    ctx.strokeStyle = t.color;
+    ctx.lineWidth = 1.5;
+    ctx.shadowColor = t.color;
+    ctx.shadowBlur = 6;
+    ctx.beginPath();
+    ctx.moveTo(tx0, ty0);
+    ctx.lineTo(endX, endY);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+  ctx.restore();
+}
+
 function drawWeapon() {
   const w = canvas.width;
   const h = canvas.height;
@@ -1771,6 +1872,19 @@ function drawScreenEffects() {
 
   if (game.damageTimer > 0) {
     ctx.fillStyle = `rgba(255, 93, 108, ${game.damageTimer * 0.35})`;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+  }
+
+  if (game.player.health <= 25 && game.player.health > 0) {
+    const pulse = 0.5 + 0.5 * Math.sin(game.elapsed * 5.5);
+    const alpha = 0.08 + pulse * 0.16;
+    const edge = ctx.createRadialGradient(
+      canvas.width / 2, canvas.height / 2, canvas.width * 0.28,
+      canvas.width / 2, canvas.height / 2, canvas.width * 0.7,
+    );
+    edge.addColorStop(0, "rgba(255, 0, 0, 0)");
+    edge.addColorStop(1, `rgba(255, 0, 0, ${alpha})`);
+    ctx.fillStyle = edge;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
   }
 }
