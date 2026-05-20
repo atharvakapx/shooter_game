@@ -35,6 +35,13 @@ const MAX_HEALTH_PACKS = 3;
 const HEALTH_PACK_HEAL = 30;
 const HEALTH_PACK_INTERVAL = 8;
 
+const PLAYER_WALK_SPEED = 150;
+const PLAYER_BACK_SPEED = 105;
+const PLAYER_STRAFE_SPEED = 130;
+const PLAYER_SPRINT_SPEED = 228;
+const PLAYER_ACCEL = 13;
+const RECOIL_KICK = 0.036;
+
 let game;
 let lastTime = 0;
 let audioCtx;
@@ -76,9 +83,11 @@ function createEnemy(spawn, index) {
 function resetGame(running = true) {
   game = {
     running,
+    mouseHeld: false,
     messageTimer: 0,
     flashTimer: 0,
     damageTimer: 0,
+    hitMarkerTimer: 0,
     elapsed: 0,
     player: {
       x: TILE * 1.5,
@@ -87,6 +96,9 @@ function resetGame(running = true) {
       pitch: 0,
       health: 100,
       cooldown: 0,
+      vx: 0,
+      vy: 0,
+      footstepDist: 0,
     },
     enemies: enemySpawns.map(createEnemy),
     healthPacks: [],
@@ -311,6 +323,18 @@ function playSound(type) {
     return;
   }
 
+  if (type === "kill") {
+    osc.type = "sawtooth";
+    osc.frequency.setValueAtTime(880, now);
+    osc.frequency.exponentialRampToValueAtTime(220, now + 0.18);
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(0.22, now + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.22);
+    osc.start(now);
+    osc.stop(now + 0.23);
+    return;
+  }
+
   if (type === "damage") {
     osc.type = "sine";
     osc.frequency.setValueAtTime(130, now);
@@ -332,6 +356,18 @@ function playSound(type) {
     gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.18);
     osc.start(now);
     osc.stop(now + 0.2);
+    return;
+  }
+
+  if (type === "footstep") {
+    osc.type = "triangle";
+    osc.frequency.setValueAtTime(85, now);
+    osc.frequency.exponentialRampToValueAtTime(38, now + 0.07);
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(0.055, now + 0.006);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.08);
+    osc.start(now);
+    osc.stop(now + 0.09);
     return;
   }
 
@@ -369,13 +405,32 @@ function shoot(shooter, target, isPlayer) {
   shooter.cooldown = isPlayer ? PLAYER_SHOT_COOLDOWN : 0.8;
   playSound(isPlayer ? "playerShot" : "enemyShot");
 
+  if (isPlayer) {
+    shooter.pitch = clamp(shooter.pitch - RECOIL_KICK, -MAX_PITCH, MAX_PITCH);
+  }
+
   if (canHit) {
     const damage = isPlayer ? 25 : 12;
+    const wasAlive = target.health > 0;
     target.health = Math.max(0, target.health - damage);
-    if (isPlayer) target.hitTimer = 0.18;
-    if (!isPlayer) game.damageTimer = 0.32;
-    playSound(isPlayer ? "hit" : "damage");
-    setMessage(isPlayer ? "Hit" : "Under fire", 0.45);
+
+    if (isPlayer) {
+      target.hitTimer = 0.18;
+      game.hitMarkerTimer = 0.22;
+
+      if (wasAlive && target.health <= 0) {
+        addDeathParticles(target);
+        playSound("kill");
+        setMessage("Kill", 0.7);
+      } else {
+        playSound("hit");
+        setMessage("Hit", 0.45);
+      }
+    } else {
+      game.damageTimer = 0.32;
+      playSound("damage");
+      setMessage("Under fire", 0.45);
+    }
   } else if (isPlayer) {
     setMessage("Miss", 0.28);
   }
@@ -396,6 +451,21 @@ function addShotParticles(shooter, angle, isPlayer) {
       dy: Math.sin(angle + (Math.random() - 0.5) * 0.18) * (140 + Math.random() * 150),
       life: 0.22,
       color,
+    });
+  }
+}
+
+function addDeathParticles(enemy) {
+  for (let i = 0; i < 22; i++) {
+    const angle = Math.random() * Math.PI * 2;
+    const speed = 70 + Math.random() * 190;
+    game.particles.push({
+      x: enemy.x,
+      y: enemy.y,
+      dx: Math.cos(angle) * speed,
+      dy: Math.sin(angle) * speed,
+      life: 0.38 + Math.random() * 0.28,
+      color: Math.random() > 0.45 ? "#ff5d6c" : "#ffce63",
     });
   }
 }
@@ -449,25 +519,48 @@ function update(dt) {
   player.cooldown = Math.max(0, player.cooldown - dt);
   game.flashTimer = Math.max(0, game.flashTimer - dt);
   game.damageTimer = Math.max(0, game.damageTimer - dt);
+  game.hitMarkerTimer = Math.max(0, game.hitMarkerTimer - dt);
   for (const enemy of game.enemies) {
     enemy.cooldown = Math.max(0, enemy.cooldown - dt);
     enemy.hitTimer = Math.max(0, enemy.hitTimer - dt);
   }
 
-  let forward = 0;
-  if (keys.has("KeyW")) forward += 1;
-  if (keys.has("KeyS")) forward -= 1;
-  if (forward !== 0) {
-    const speed = forward > 0 ? 150 : 105;
-    moveEntity(player, Math.cos(player.angle) * speed * forward * dt, Math.sin(player.angle) * speed * forward * dt);
+  const sprinting = keys.has("ShiftLeft") || keys.has("ShiftRight");
+
+  let targetFwd = 0;
+  if (keys.has("KeyW")) targetFwd += sprinting ? PLAYER_SPRINT_SPEED : PLAYER_WALK_SPEED;
+  if (keys.has("KeyS")) targetFwd -= PLAYER_BACK_SPEED;
+
+  let targetSide = 0;
+  if (keys.has("KeyA")) targetSide -= sprinting ? PLAYER_SPRINT_SPEED * 0.86 : PLAYER_STRAFE_SPEED;
+  if (keys.has("KeyD")) targetSide += sprinting ? PLAYER_SPRINT_SPEED * 0.86 : PLAYER_STRAFE_SPEED;
+
+  const fwdX = Math.cos(player.angle);
+  const fwdY = Math.sin(player.angle);
+  const rightX = Math.cos(player.angle + Math.PI / 2);
+  const rightY = Math.sin(player.angle + Math.PI / 2);
+
+  const targetVx = fwdX * targetFwd + rightX * targetSide;
+  const targetVy = fwdY * targetFwd + rightY * targetSide;
+
+  player.vx += (targetVx - player.vx) * Math.min(1, PLAYER_ACCEL * dt);
+  player.vy += (targetVy - player.vy) * Math.min(1, PLAYER_ACCEL * dt);
+
+  moveEntity(player, player.vx * dt, player.vy * dt);
+
+  const movSpeed = Math.hypot(player.vx, player.vy);
+  if (movSpeed > 20) {
+    player.footstepDist += movSpeed * dt;
+    const stepInterval = sprinting ? 50 : 76;
+    if (player.footstepDist >= stepInterval) {
+      player.footstepDist = 0;
+      playSound("footstep");
+    }
   }
 
-  let strafe = 0;
-  if (keys.has("KeyA")) strafe -= 1;
-  if (keys.has("KeyD")) strafe += 1;
-  if (strafe !== 0) {
-    const strafeAngle = player.angle + Math.PI / 2;
-    moveEntity(player, Math.cos(strafeAngle) * 130 * strafe * dt, Math.sin(strafeAngle) * 130 * strafe * dt);
+  if (game.mouseHeld && player.cooldown <= 0) {
+    const target = getAimedEnemy();
+    if (target) shoot(player, target, true);
   }
 
   updateHealthPacks(dt);
@@ -570,6 +663,7 @@ function render() {
   drawWeapon();
   drawMiniMap();
   drawScreenEffects();
+  drawHitMarker();
   requestAnimationFrame(loop);
 }
 
@@ -825,10 +919,15 @@ function drawParticles3D() {
 function drawWeapon() {
   const w = canvas.width;
   const h = canvas.height;
-  const bob = Math.sin(performance.now() / 120) * 3;
+  const movSpeed = Math.hypot(game.player.vx, game.player.vy);
+  const bobAmt = clamp(movSpeed / PLAYER_WALK_SPEED, 0, 1);
+  const sprinting = keys.has("ShiftLeft") || keys.has("ShiftRight");
+  const bobFreq = sprinting ? 130 : 185;
+  const bob = Math.sin(performance.now() / bobFreq) * 6 * bobAmt;
+  const sway = Math.cos(performance.now() / (bobFreq * 2)) * 4 * bobAmt;
 
   ctx.save();
-  ctx.translate(w * 0.5, h + bob + game.player.pitch * h * 0.14);
+  ctx.translate(w * 0.5 + sway, h + bob + game.player.pitch * h * 0.14);
   const weaponGradient = ctx.createLinearGradient(-60, -190, 60, -40);
   weaponGradient.addColorStop(0, "#4a565d");
   weaponGradient.addColorStop(0.5, "#242c31");
@@ -855,6 +954,28 @@ function drawWeapon() {
     ctx.closePath();
     ctx.fill();
   }
+  ctx.restore();
+}
+
+function drawHitMarker() {
+  if (!game.hitMarkerTimer || game.hitMarkerTimer <= 0) return;
+
+  const cx = canvas.width / 2;
+  const cy = canvas.height / 2;
+  const alpha = clamp(game.hitMarkerTimer / 0.22, 0, 1);
+  const s = 11;
+
+  ctx.save();
+  ctx.strokeStyle = `rgba(255, 255, 255, ${alpha * 0.92})`;
+  ctx.lineWidth = 2.2;
+  ctx.shadowColor = "rgba(32, 215, 181, 0.8)";
+  ctx.shadowBlur = 6;
+  ctx.beginPath();
+  ctx.moveTo(cx - s, cy - s);
+  ctx.lineTo(cx + s, cy + s);
+  ctx.moveTo(cx + s, cy - s);
+  ctx.lineTo(cx - s, cy + s);
+  ctx.stroke();
   ctx.restore();
 }
 
@@ -934,7 +1055,7 @@ function loop(time) {
 }
 
 window.addEventListener("keydown", (event) => {
-  if (["KeyW", "KeyA", "KeyS", "KeyD"].includes(event.code)) {
+  if (["KeyW", "KeyA", "KeyS", "KeyD", "ShiftLeft", "ShiftRight"].includes(event.code)) {
     event.preventDefault();
     keys.add(event.code);
   }
@@ -972,8 +1093,13 @@ canvas.addEventListener("mousedown", (event) => {
   if (event.button !== 0 || !game?.running) return;
   initAudio();
   canvas.requestPointerLock?.();
+  game.mouseHeld = true;
   const target = getAimedEnemy();
   if (target) shoot(game.player, target, true);
+});
+
+window.addEventListener("mouseup", (event) => {
+  if (event.button === 0 && game) game.mouseHeld = false;
 });
 
 startBtn.addEventListener("click", () => {
