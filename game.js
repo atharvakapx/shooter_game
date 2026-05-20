@@ -17,21 +17,23 @@ const statusText = document.querySelector("#statusText");
 
 const keys = new Set();
 const map = [
-  "111111111111",
-  "100000000001",
-  "101001010101",
-  "100000010001",
-  "101010000101",
-  "100010100001",
-  "101000001101",
-  "100000000001",
-  "111111111111",
+  "1111111111111111",
+  "1000000000000001",
+  "1011000100001101",
+  "1000000000000001",
+  "1001000110010001",
+  "1000000000000001",
+  "1010010001001001",
+  "1000000000000001",
+  "1011001000010101",
+  "1000000000000001",
+  "1111111111111111",
 ];
 
 const TILE = 64;
 const FOV = Math.PI / 3;
 const RAYS = 240;
-const MAX_DEPTH = 900;
+const MAX_DEPTH = 1300;
 const MOUSE_SENSITIVITY = 0.0024;
 const MAX_PITCH = 0.62;
 const MAX_HEALTH_PACKS = 3;
@@ -93,41 +95,41 @@ let lastTime = 0;
 let audioCtx;
 
 const enemySpawns = [
-  { x: TILE * 5.5, y: TILE * 3.5 },
-  { x: TILE * 9.5, y: TILE * 1.5 },
-  { x: TILE * 7.5, y: TILE * 5.5 },
-  { x: TILE * 3.5, y: TILE * 6.5 },
-  { x: TILE * 6.5, y: TILE * 7.5 },
-  { x: TILE * 2.5, y: TILE * 5.5 },
-  { x: TILE * 9.5, y: TILE * 5.5 },
-  { x: TILE * 5.5, y: TILE * 1.5 },
+  { x: TILE *  5.5, y: TILE * 3.5 },
+  { x: TILE * 13.5, y: TILE * 1.5 },
+  { x: TILE * 11.5, y: TILE * 5.5 },
+  { x: TILE *  3.5, y: TILE * 7.5 },
+  { x: TILE *  8.5, y: TILE * 9.5 },
+  { x: TILE *  1.5, y: TILE * 4.5 },
+  { x: TILE * 13.5, y: TILE * 7.5 },
+  { x: TILE *  6.5, y: TILE * 1.5 },
 ];
 
 const enemyPatrols = [
-  [{ x: TILE * 5.5, y: TILE * 3.5 }, { x: TILE * 9.5, y: TILE * 3.5 }, { x: TILE * 9.5, y: TILE * 7.5 }],
-  [{ x: TILE * 9.5, y: TILE * 1.5 }, { x: TILE * 9.5, y: TILE * 7.5 }, { x: TILE * 1.5, y: TILE * 7.5 }],
-  [{ x: TILE * 7.5, y: TILE * 5.5 }, { x: TILE * 7.5, y: TILE * 7.5 }, { x: TILE * 3.5, y: TILE * 7.5 }, { x: TILE * 3.5, y: TILE * 5.5 }],
-  [{ x: TILE * 3.5, y: TILE * 6.5 }, { x: TILE * 6.5, y: TILE * 6.5 }, { x: TILE * 6.5, y: TILE * 3.5 }],
-  [{ x: TILE * 6.5, y: TILE * 7.5 }, { x: TILE * 1.5, y: TILE * 7.5 }, { x: TILE * 1.5, y: TILE * 3.5 }],
-  [{ x: TILE * 2.5, y: TILE * 5.5 }, { x: TILE * 2.5, y: TILE * 7.5 }, { x: TILE * 5.5, y: TILE * 7.5 }],
-  [{ x: TILE * 9.5, y: TILE * 5.5 }, { x: TILE * 5.5, y: TILE * 5.5 }, { x: TILE * 5.5, y: TILE * 3.5 }],
-  [{ x: TILE * 5.5, y: TILE * 1.5 }, { x: TILE * 8.5, y: TILE * 1.5 }, { x: TILE * 8.5, y: TILE * 5.5 }],
+  [{ x: TILE * 5.5, y: TILE * 3.5 }, { x: TILE * 12.5, y: TILE * 3.5 }, { x: TILE * 12.5, y: TILE * 9.5 }, { x: TILE * 5.5, y: TILE * 9.5 }],
+  [{ x: TILE * 13.5, y: TILE * 1.5 }, { x: TILE * 13.5, y: TILE * 9.5 }, { x: TILE * 1.5, y: TILE * 9.5 }],
+  [{ x: TILE * 11.5, y: TILE * 5.5 }, { x: TILE * 11.5, y: TILE * 9.5 }, { x: TILE * 3.5, y: TILE * 9.5 }, { x: TILE * 3.5, y: TILE * 5.5 }],
+  [{ x: TILE * 3.5, y: TILE * 7.5 }, { x: TILE * 7.5, y: TILE * 7.5 }, { x: TILE * 7.5, y: TILE * 3.5 }, { x: TILE * 1.5, y: TILE * 3.5 }],
+  [{ x: TILE * 8.5, y: TILE * 9.5 }, { x: TILE * 1.5, y: TILE * 9.5 }, { x: TILE * 1.5, y: TILE * 5.5 }],
+  [{ x: TILE * 1.5, y: TILE * 4.5 }, { x: TILE * 1.5, y: TILE * 7.5 }, { x: TILE * 6.5, y: TILE * 7.5 }],
+  [{ x: TILE * 13.5, y: TILE * 7.5 }, { x: TILE * 7.5, y: TILE * 7.5 }, { x: TILE * 7.5, y: TILE * 5.5 }],
+  [{ x: TILE * 6.5, y: TILE * 1.5 }, { x: TILE * 11.5, y: TILE * 1.5 }, { x: TILE * 11.5, y: TILE * 5.5 }],
 ];
 
 const healthPackCells = [
-  { x: 1, y: 6 },
-  { x: 3, y: 1 },
-  { x: 4, y: 3 },
-  { x: 7, y: 1 },
-  { x: 8, y: 4 },
-  { x: 10, y: 7 },
+  { x:  1, y: 7 },
+  { x:  3, y: 1 },
+  { x:  5, y: 5 },
+  { x:  9, y: 1 },
+  { x: 11, y: 7 },
+  { x: 13, y: 9 },
 ];
 
 const armorPackCells = [
-  { x: 5, y: 2 },
-  { x: 2, y: 7 },
-  { x: 9, y: 3 },
-  { x: 6, y: 6 },
+  { x:  7, y: 5 },
+  { x:  2, y: 9 },
+  { x: 12, y: 3 },
+  { x:  9, y: 7 },
 ];
 
 const MAX_ARMOR = 50;
@@ -174,6 +176,9 @@ function resetGame(running = true) {
     killStreakTimer: 0,
     _lastShotHeadshot: false,
     killFeed: [],
+    shakeTimer: 0,
+    shakeY: 0,
+    shakeIntensity: 0,
     player: {
       x: TILE * 1.5,
       y: TILE * 1.5,
@@ -273,7 +278,7 @@ function clamp(value, min, max) {
 function getHorizon() {
   const crouchShift = game.player.crouching ? canvas.height * 0.055 : 0;
   const jumpShift = -game.player.jumpHeight * 0.38;
-  return canvas.height * (0.5 - game.player.pitch * 0.42) + crouchShift + jumpShift;
+  return canvas.height * (0.5 - game.player.pitch * 0.42) + crouchShift + jumpShift + (game.shakeY || 0);
 }
 
 function getLivingEnemies() {
@@ -299,7 +304,7 @@ function getAimedEnemy() {
     const clearShot = hasLineOfSight(game.player, enemy);
     const maxRange = weapon.id === "shotgun" ? 380 : 520;
 
-    if (!clearShot || dist > maxRange || aimError > weapon.aimRadius) continue;
+    if (!clearShot || dist > maxRange || aimError > weapon.aimRadius * 1.15) continue;
     if (!best || aimError < best.aimError) best = { enemy, aimError };
   }
 
@@ -349,9 +354,14 @@ function spawnArmorPack() {
 function hasLineOfSight(from, to) {
   if (isWall(from.x, from.y) || isWall(to.x, to.y)) return false;
 
-  for (let y = 0; y < map.length; y++) {
-    for (let x = 0; x < map[y].length; x++) {
-      if (map[y][x] !== "1") continue;
+  const x1 = Math.max(0, Math.floor(Math.min(from.x, to.x) / TILE) - 1);
+  const x2 = Math.min(map[0].length - 1, Math.ceil(Math.max(from.x, to.x) / TILE) + 1);
+  const y1 = Math.max(0, Math.floor(Math.min(from.y, to.y) / TILE) - 1);
+  const y2 = Math.min(map.length - 1, Math.ceil(Math.max(from.y, to.y) / TILE) + 1);
+
+  for (let y = y1; y <= y2; y++) {
+    for (let x = x1; x <= x2; x++) {
+      if (map[y]?.[x] !== "1") continue;
 
       const wall = {
         left: x * TILE,
@@ -648,6 +658,10 @@ function shoot(shooter, target, isPlayer) {
     game.player.ammo--;
     shooter.pitch = clamp(shooter.pitch - weapon.recoil, -MAX_PITCH, MAX_PITCH);
     playSound(weapon.id === "shotgun" ? "shotgunShot" : "playerShot");
+    if (weapon.id === "shotgun") {
+      game.shakeTimer = 0.09;
+      game.shakeIntensity = 0.014;
+    }
   } else {
     playSound("enemyShot");
   }
@@ -671,7 +685,7 @@ function shoot(shooter, target, isPlayer) {
     const pelletAngle = angleToTarget + pelletSpread;
     const pelletAimError = Math.abs(normalizeAngle(pelletAngle - shooter.angle));
     const pitchError = isPlayer ? Math.abs(shooter.pitch) : 0;
-    const maxRange = isPlayer && weapon.id === "shotgun" ? 380 : 520;
+    const maxRange = isPlayer && weapon.id === "shotgun" ? 420 : 640;
     const canHit = pelletAimError < aimRadiusBase && pitchError < 0.3 && dist < maxRange && clearShot;
 
     if (canHit) {
@@ -735,6 +749,8 @@ function shoot(shooter, target, isPlayer) {
       game.damageTimer = 0.45;
       game.damageAngle = Math.atan2(shooter.y - game.player.y, shooter.x - game.player.x);
       game.player.lastDamageTime = game.elapsed;
+      game.shakeTimer = 0.14;
+      game.shakeIntensity = 0.022;
       playSound("damage");
       setMessage("Under fire", 0.45);
     }
@@ -866,6 +882,12 @@ function update(dt) {
   game.killStreakTimer = Math.max(0, game.killStreakTimer - dt);
   if (game.killStreakTimer <= 0) game.killStreakCount = 0;
   game.killFeed = game.killFeed.filter((e) => { e.timer -= dt; return e.timer > 0; });
+  if (game.shakeTimer > 0) {
+    game.shakeTimer -= dt;
+    game.shakeY = (Math.random() - 0.5) * game.shakeIntensity * canvas.height;
+  } else {
+    game.shakeY = 0;
+  }
 
   if (game.roundTransitionTimer > 0) {
     game.roundTransitionTimer -= dt;
@@ -1041,7 +1063,7 @@ function updateEnemy(enemy, dt) {
   const angleToPlayer = Math.atan2(player.y - enemy.y, player.x - enemy.x);
   const dist = Math.hypot(player.x - enemy.x, player.y - enemy.y);
   const clearSight = hasLineOfSight(enemy, player);
-  const playerInRange = dist < 520;
+  const playerInRange = dist < 640;
   const aimGap = Math.abs(normalizeAngle(angleToPlayer - enemy.angle));
   const seesPlayer = clearSight && playerInRange && aimGap < 1.45;
 
@@ -1166,12 +1188,17 @@ function drawWorld() {
     const shade = Math.max(0.18, 1 - corrected / MAX_DEPTH);
     const edge = (Math.floor(hit.x / TILE) + Math.floor(hit.y / TILE)) % 2;
     const pulse = 0.04 * Math.sin(performance.now() / 450 + i * 0.08);
+    const fog = Math.min(1, corrected / (MAX_DEPTH * 0.65));
     ctx.fillStyle = edge ? `rgba(32, 215, 181, ${shade + pulse})` : `rgba(103, 137, 151, ${shade})`;
     ctx.fillRect(i * sliceW, horizon - wallH / 2, sliceW, wallH);
     ctx.fillStyle = `rgba(0, 0, 0, ${0.42 - shade * 0.26})`;
     ctx.fillRect(i * sliceW, horizon - wallH / 2, sliceW, wallH);
+    if (fog > 0) {
+      ctx.fillStyle = `rgba(16, 22, 28, ${fog * 0.78})`;
+      ctx.fillRect(i * sliceW, horizon - wallH / 2, sliceW, wallH);
+    }
     if (i % 12 === 0) {
-      ctx.fillStyle = `rgba(255, 255, 255, ${0.04 * shade})`;
+      ctx.fillStyle = `rgba(255, 255, 255, ${0.04 * shade * (1 - fog)})`;
       ctx.fillRect(i * sliceW, horizon - wallH / 2, 1, wallH);
     }
   }
@@ -1663,7 +1690,7 @@ function drawScreenEffects() {
 }
 
 function drawMiniMap() {
-  const scale = 0.23;
+  const scale = 0.17;
   const pad = 18;
   const mapW = map[0].length * TILE * scale;
   const mapH = map.length * TILE * scale;
