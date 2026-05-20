@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Neon Arena FPS</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="game-wrap" aria-label="Neon Arena FPS game">
+        <canvas id="game" width="960" height="540"></canvas>
+
+        <div class="hud hud-top">
+          <div class="hud-card vital-card">
+            <div class="readout">
+              <span>YOU</span>
+              <strong id="playerHealth">100</strong>
+            </div>
+            <div class="meter" aria-hidden="true">
+              <div id="playerHealthBar" class="meter-fill player-fill"></div>
+            </div>
+          </div>
+
+          <div class="status" id="statusText">Click Start</div>
+
+          <div class="hud-card vital-card">
+            <div class="readout">
+              <span>BOTS</span>
+              <strong id="enemyHealth">100</strong>
+            </div>
+            <div class="meter" aria-hidden="true">
+              <div id="enemyHealthBar" class="meter-fill enemy-fill"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="hud hud-bottom">
+          <div class="hud-card weapon-card">
+            <div class="readout">
+              <span>BLASTER</span>
+              <strong id="weaponState">Ready</strong>
+            </div>
+            <div class="meter" aria-hidden="true">
+              <div id="weaponChargeBar" class="meter-fill weapon-fill"></div>
+            </div>
+          </div>
+
+          <button id="startBtn" type="button">Start</button>
+
+          <div class="hud-card intel-card">
+            <div>
+              <span>RANGE</span>
+              <strong id="enemyDistance">--m</strong>
+            </div>
+            <div>
+              <span>TIME</span>
+              <strong id="matchTimer">0:00</strong>
+            </div>
+          </div>
+        </div>
+
+        <div class="hud-card controls-card">
+          <span>WASD MOVE</span>
+          <span>MOUSE LOOK</span>
+          <span>CLICK FIRE</span>
+        </div>
+
+        <div class="crosshair" aria-hidden="true"></div>
+      </section>
+    </main>
+
+    <script src="game.js"></script>
+  </body>
+</html>
